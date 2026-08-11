@@ -360,6 +360,8 @@ export interface ExtensionContext {
 	abort(): void;
 	/** Whether there are queued messages waiting */
 	hasPendingMessages(): boolean;
+	/** Request a runtime reload after the current extension operation settles. */
+	requestReload(): void;
 	/** Gracefully shutdown pi and exit. Available in all contexts. */
 	shutdown(): void;
 	/** Get current context usage for the active model. */
@@ -435,9 +437,6 @@ export interface ExtensionCommandContext extends ExtensionContext {
 		sessionPath: string,
 		options?: { withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
 	): Promise<{ cancelled: boolean }>;
-
-	/** Reload extensions, skills, prompts, themes, and context files. */
-	reload(): Promise<void>;
 }
 
 /**
@@ -2226,6 +2225,8 @@ export interface ExtensionContextActions {
 	getSignal: () => AbortSignal | undefined;
 	abort: () => void;
 	hasPendingMessages: () => boolean;
+	requestReload: () => void;
+	onOperationComplete: () => Promise<void>;
 	shutdown: () => void;
 	getContextUsage: () => ContextUsage | undefined;
 	compact: (options?: CompactOptions) => void;
@@ -2265,7 +2266,6 @@ export interface ExtensionCommandContextActions {
 		sessionPath: string,
 		options?: { withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
 	) => Promise<{ cancelled: boolean }>;
-	reload: () => Promise<void>;
 }
 
 /**

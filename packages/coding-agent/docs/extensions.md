@@ -1260,6 +1260,38 @@ pi.on("tool_call", (event, ctx) => {
 });
 ```
 
+### ctx.requestReload()
+
+Schedule the same runtime reload as `/reload` after the current extension operation and agent work settle. The request is fire-and-forget, so call it last and return without reusing the old context.
+
+Concurrent requests are coalesced, requests made during reload are ignored, and session teardown discards pending requests. TUI and RPC modes support reload requests; print and JSON modes ignore them.
+
+```typescript
+pi.registerCommand("reload-runtime", {
+  description: "Reload extensions, skills, prompts, themes, and context files",
+  handler: async (_args, ctx) => {
+    ctx.requestReload();
+    return;
+  },
+});
+
+pi.registerTool({
+  name: "reload_runtime",
+  label: "Reload Runtime",
+  description: "Reload extensions, skills, prompts, themes, and context files",
+  parameters: Type.Object({}),
+  async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+    ctx.requestReload();
+    return {
+      content: [{ type: "text", text: "Reload requested." }],
+      details: {},
+    };
+  },
+});
+```
+
+Reload emits `session_shutdown` for the current runtime, reloads resources, then emits `session_start` and `resources_discover` with reason `"reload"`. Future commands, events, and tool calls use the replacement runtime.
+
 ### ctx.getContextUsage()
 
 Returns current context usage for the active model. Uses last assistant usage when available, then estimates tokens for trailing messages.
@@ -1496,59 +1528,6 @@ pi.registerCommand("handoff", {
   },
 });
 ```
-
-### ctx.reload()
-
-Run the same reload flow as `/reload`.
-
-```typescript
-pi.registerCommand("reload-runtime", {
-  description: "Reload extensions, skills, prompts, themes, and context files",
-  handler: async (_args, ctx) => {
-    await ctx.reload();
-    return;
-  },
-});
-```
-
-Important behavior:
-- `await ctx.reload()` emits `session_shutdown` for the current extension runtime
-- It then reloads resources and emits `session_start` with `reason: "reload"` and `resources_discover` with reason `"reload"`
-- The currently running command handler still continues in the old call frame
-- Code after `await ctx.reload()` still runs from the pre-reload version
-- Code after `await ctx.reload()` must not assume old in-memory extension state is still valid
-- After the handler returns, future commands/events/tool calls use the new extension version
-
-For predictable behavior, treat reload as terminal for that handler (`await ctx.reload(); return;`).
-
-Tools run with `ExtensionToolContext`, not `ExtensionCommandContext`, so they cannot call `ctx.reload()`, and Pi cannot reload while the agent is running. To let the LLM trigger a reload, have the tool record the request and run the command from `agent_settled`, where messages sent by handlers are processed after all settled handlers finish:
-
-```typescript
-let reloadRequested = false;
-
-pi.registerTool({
-  name: "reload_runtime",
-  label: "Reload Runtime",
-  description: "Reload extensions, skills, prompts, themes, and context files",
-  parameters: Type.Object({}),
-  async execute() {
-    reloadRequested = true;
-    return {
-      content: [{ type: "text", text: "Reload requested. Pi reloads after this response." }],
-      details: {},
-      terminate: true,
-    };
-  },
-});
-
-pi.on("agent_settled", () => {
-  if (!reloadRequested) return;
-  reloadRequested = false;
-  pi.sendUserMessage("/reload-runtime", { expandPromptTemplates: true });
-});
-```
-
-`expandPromptTemplates: true` dispatches the text as a command. Without it, or when queued with `deliverAs`, the text reaches the model as a plain user message. See [reload-runtime.ts](../examples/extensions/reload-runtime.ts).
 
 ## ExtensionAPI Methods
 
@@ -3257,7 +3236,7 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `handoff.ts` | Cross-provider model handoff | `registerCommand`, `ui.editor`, `ui.custom` |
 | `qna.ts` | Q&A with custom UI | `registerCommand`, `ui.custom`, `setEditorText` |
 | `send-user-message.ts` | Inject user messages | `registerCommand`, `sendUserMessage` |
-| `reload-runtime.ts` | Reload command and LLM tool handoff | `registerCommand`, `ctx.reload()`, `on("agent_settled")`, `sendUserMessage` |
+| `reload-runtime.ts` | Deferred command and tool reload | `registerCommand`, `ctx.requestReload()` |
 | `shutdown-command.ts` | Graceful shutdown command | `registerCommand`, `shutdown()` |
 | **Events & Gates** |||
 | `permission-gate.ts` | Block dangerous commands | `on("tool_call")`, `ui.select` |
