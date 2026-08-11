@@ -256,7 +256,7 @@ export class RuntimeReloadError extends Error {
 	}
 }
 
-export interface RuntimeReloadHooks {
+export interface RuntimeReloadCallbacks {
 	beforeReload?(): void | Promise<void>;
 	beforeSessionStart?(): void | Promise<void>;
 	afterReload?(): void | Promise<void>;
@@ -320,7 +320,7 @@ export interface ExtensionBindings {
 	abortHandler?: () => void;
 	shutdownHandler?: ShutdownHandler;
 	onError?: ExtensionErrorListener;
-	reloadHooks?: RuntimeReloadHooks;
+	reloadHooks?: RuntimeReloadCallbacks;
 }
 
 export type QueuedInputDisposition = "handled" | "queued";
@@ -480,7 +480,7 @@ export class AgentSession {
 	private _extensionShutdownHandler?: ShutdownHandler;
 	private _extensionErrorListener?: ExtensionErrorListener;
 	private _extensionErrorUnsubscriber?: () => void;
-	private _runtimeReloadHooks?: RuntimeReloadHooks;
+	private _runtimeReloadHooks?: RuntimeReloadCallbacks;
 	private _extensionsBound = false;
 	private _runtimeAvailability: RuntimeAvailability = "available";
 	private _runtimeReloadError?: RuntimeReloadError;
@@ -1166,7 +1166,7 @@ export class AgentSession {
 		}
 	}
 
-	private async _performReload(hooks: RuntimeReloadHooks | undefined): Promise<void> {
+	private async _performReload(hooks: RuntimeReloadCallbacks | undefined): Promise<void> {
 		let runtimeInvalidated = false;
 		this._runtimeAvailability = "reloading";
 		try {
@@ -3889,7 +3889,7 @@ export class AgentSession {
 
 	/** Tear down the old runtime, then enter the same load and start path used during startup. */
 	private async _reloadRuntime(
-		beforeSessionStart: RuntimeReloadHooks["beforeSessionStart"],
+		beforeSessionStart: RuntimeReloadCallbacks["beforeSessionStart"],
 		onInvalidated: () => void,
 	): Promise<void> {
 		const oldRunner = this._extensionRunner;

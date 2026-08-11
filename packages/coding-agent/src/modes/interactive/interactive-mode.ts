@@ -69,7 +69,7 @@ import {
 	type AgentSession,
 	type AgentSessionEvent,
 	parseSkillBlock,
-	type RuntimeReloadHooks,
+	type RuntimeReloadCallbacks,
 } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
@@ -6520,7 +6520,7 @@ export class InteractiveMode {
 		}
 	}
 
-	private createReloadHooks(): RuntimeReloadHooks {
+	private createReloadHooks(): RuntimeReloadCallbacks {
 		let previousEditor: Component | undefined;
 		let reloadBoxDismissed = true;
 		let chatRestoredBeforeSessionStart = false;
