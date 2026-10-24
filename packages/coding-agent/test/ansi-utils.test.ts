@@ -107,4 +107,12 @@ describe("stripAnsi", () => {
 		const input = "a\x1b[31mred\x1b[0m\x1b]8;;https://example.com\x07link\x1b]8;;\x07z";
 		expect(stripAnsi(input)).toBe("aredlinkz");
 	});
+
+	it("strips private-parameter CSI sequences with their parameters", () => {
+		expect(stripAnsi("\x1b[<35;59;1Mstep 1")).toBe("step 1");
+		expect(stripAnsi("a\x1b[<0;10;20mb")).toBe("ab");
+		expect(stripAnsi("a\x1b[>0;276;0cb")).toBe("ab");
+		expect(stripAnsi("a\x1b[=5hb")).toBe("ab");
+		expect(stripAnsi("a\x9b<35;59;1Mb")).toBe("ab");
+	});
 });

@@ -32,8 +32,9 @@ const ST = "(?:\\u0007|\\u001B\\u005C|\\u009C)";
 // OSC sequences: ESC ] ... ST
 const OSC_START = "\\u001B\\]";
 
-// CSI and related: ESC/C1, optional intermediates, optional params (supports ; and :), then final byte
-const CSI_START = "[\\u001B\\u009B][[\\]()#;?]*(?:\\d{1,4}(?:[;:]\\d{0,4})*)?";
+// CSI and related: ESC/C1, optional intermediates, optional private prefix (<, =, >), optional params
+// (supports ; and :), then final byte
+const CSI_START = "[\\u001B\\u009B][[\\]()#;?]*[<=>]?(?:\\d{1,4}(?:[;:]\\d{0,4})*)?";
 const CSI_FINAL = "[\\dA-PR-TZcf-nq-uy=><~]";
 
 // Complete sequences. OSC is non-greedy until the first ST.
