@@ -89,7 +89,9 @@ worker worker worker      addressable by a typed address, started on demand
 | worker | yes, many | stamped by the parent | started on demand by the app |
 
 Clients serve only `local` types (they are not addressable): a host without a principal refuses to serve a remote type
-(`load` throws; a remote object is owned by a principal of the host serving it; owner, 2026-10-24). A client's local
+(`load` throws; a remote object is owned by a principal of the host serving it; owner, 2026-10-24). No client providers for now (owner,
+2026-10-28): client-side capabilities (a camera, WebMCP tools) go through an owner's requests that clients answer
+(section 20, the Questions service). A client's local
 calls have no principal; what a client calls on the server is stamped with the client's authenticated principal.
 Clients reach workers only through the server, which relays; workers reach each other through the server too. A
 detached process (e.g. a terminal host) would be another child kind of the server. Things that are not hosts: a code
