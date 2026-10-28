@@ -215,7 +215,7 @@ and closed by the app with `store.close(ctx)` after `host.close`; the host never
 background, as a tagged `HostError`: `listener_error` (a watch listener threw), `delivery_failed` (a frame delivery
 threw), `activation_failed { object, failure }`, `close_failed { object, native, error }`, `close_timeout { object,
 native }`, `drain_timeout { object }`, `protocol_error { error }`, `resolve_failed { address, error }`; later routine
-errors (slice 5), `derive_failed { object, member?, error }` (a derive's compute threw, once per failure episode, slice 6a), `object_failed { object, failure }` (a live object failing, slice 6a; `failure` where the value is a `FailureCause`, `error` otherwise, 2026-10-27) and `storage_failed { error }`
+errors (slice 5), `derive_failed { object, member?, error }` (a derive's compute threw, once per failure episode, slice 6a), `object_failed { object, failure }` (a live object failing, slice 6a, `broken`; `transient` when a `self.follow` source failed, slice 6b R4; `failure` where the value is a `FailureCause`, `error` otherwise, 2026-10-27), `job_interrupted { object, job, id, restarts }` (a persisted run ended at the restart limit, slice 6b D6) and `storage_failed { error }`
 (slice 6a), which every app must handle: Chord never ends the process,
 the app exits with its own code for its supervisor or reopens.
 
@@ -1024,8 +1024,12 @@ host.serve(DraftStore, (_, self) => {               // local, empty params: may 
 - **Statements per commit (owner, 2026-10-26):** the store keeps `lastSeq` (the seq of its last commit) in memory (read at open,
   persisted with each commit, S9) and folds the documents engine's checks into the writes (unique keys, a partial
   unique index on the live address, conditional `UPDATE … WHERE id = ? AND version = ?`): a delta commit is about three
-  statements (revision, the record's counted conditional `UPDATE`, `lastSeq`), plus one `INSERT` with an outbox. Durable's ids in the store: `StoreStorage` keeps a `record_ids` table (one
-  namespace across Durable's five tables), its counter at open `coalesce(max(id), 1) + 1`.
+  statements (revision, the record's counted conditional `UPDATE`, `lastSeq`), plus one `INSERT` with an outbox. Durable's ids in the store (slice 6b D3): one id allocator per store
+  for every id (Durable's `mintId` and Chord's document ids; it starts at 2, saturates at `Number.MAX_SAFE_INTEGER`, each
+  commit persists it, outbox commits and archives carry it as `nextId`); `StoreStorage`'s `record_ids` table only checks
+  an id's record type. Every table and document namespace in the store is claimed once (slice 6b "owner names and
+  claims"): a table by its SQL name `"<owner>:<table>"`, documents by `(owner, namespace)`; an object claims under its
+  type, `StoreStorage.open(store, owner, ctx)` under `owner` (two harnesses on one store under two names are fine).
 - **Tables in a transaction (owner, 2026-10-26):** the table handle first, keys as objects with exactly the key
   columns, reads async, writes synchronous and buffered like a draft's ops (checked and staged, no I/O; written in the
   commit step or dropped on failure); no write shorthands on the handle:

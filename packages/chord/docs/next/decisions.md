@@ -1717,8 +1717,8 @@ validation and copies the v2 kernel added around Delta.
   declares persisted data (`self.table`, persisted `self.state`, persisted `self.job`); `StoreStorage.open(store, owner,
   ctx)` claims `owner`; a second claim of a name is refused (`invalid/args`): a second harness, or a plugin type that
   meets the harness's name. `StoreStorage` declares its own tables (`entries`, `tasks`, …) through the store, the path
-  `self.table` takes, named `"<owner>:<table>"`, and writes its documents under `owner` in the engine's namespace
-  `durable`. In p3 the harness object passes its own type (`StoreStorage.open(store, Harness.name, ctx)`; base code gives
+  `self.table` takes, named `"<owner>:<table>"`, and writes its documents under `owner` in the engine's namespaces
+  (Durable's scopes; corrected 2026-10-27, it was "`durable`"). In p3 the harness object passes its own type (`StoreStorage.open(store, Harness.name, ctx)`; base code gives
   the store to the core facet); Durable's conformance suite passes a test name. The owner name plays the role of
   `SqliteStorage`'s `prefix`, checked by the store. Objects never see the store: their API writes to the host's store
   under their type; a host without a store fails an object declaring persisted data (`broken`, 6a). Rejected: an owner
@@ -1731,6 +1731,11 @@ validation and copies the v2 kernel added around Delta.
   failed: the object that opened Durable fails `transient`, its retry reopens its natives, Durable included, and attaches
   again, as Durable's own recovery is to reopen from Storage) or `ended` (the observed owner ended normally, a task
   document's task: final, the member keeps its last value, its watches end `ended`).
+- **Slice 6b: claims per table and per document namespace (owner, 2026-10-27: "agree"; refines "owner names and
+  claims"; Fable's second review N2):** what can collide is claimed once per store: a table by its SQL name, documents by
+  `(owner, namespace)`; so the object that opens Durable can also declare its own persisted data under the same owner
+  name, and two harnesses can share a store under two owner names (owner: "seems like they could"); a second
+  `StoreStorage` on the same owner is refused by its tables. "One harness per store" is no rule, only how p3 uses it.
 - **The performance and memory bar, and converging reviews (owner, 2026-10-27: "yes"):** supersedes "as good as
   HEAD in everything" for Chord v2 slices and pi changes. CPU: each hot path (calls, changes, watches, links) within
   about 5% of HEAD, measured in bursts with alternating processes pinned to one CPU; worse is fixed or goes to the

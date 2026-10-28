@@ -163,25 +163,16 @@ deleted (the slice's spec and code are the record). Moved here from `carry-over.
 
 ### Slice 6b: Durable and jobs on the store (from slice 5 and L3a-d)
 
-- **Persisted jobs** (from slice 5): `persist: { resume: "rerun" | "abandon" }` built (record and state document in
-  the owner's store; only in `local` objects with empty params, P3, enforced at declaration); outcomes and abort
-  requests persisted (a recorded outcome resumes only `finish`); the restart limit (five crash interruptions,
-  persisted, clean closes not counted; whether a state change resets the count; what a clean close records); deferred
-  persistence for state documents (flushed before the outcome is recorded); the `finish` failure count persisted; the
-  job fingerprint stored with every record; the run's start trace carrier (§29).
-- **`StoreStorage`**: Durable's `Storage` on the store, passing Durable's storage conformance suite (memory and across
-  reopen); ids from a `record_ids` table (S10, W13); fork copies resolved before the step (S11); Durable's `adopt` run
-  inside the host's batch.
-- **`self.follow`** (was `durableView`, decision "Slice 6b D9"): a Chord source over Durable's synchronous observers (`observeConversation`, `observeTaskGraph`,
-  `observeDoc`; decision "Durable's synchronous observers"), marked inside Chord's batch in the store and grouped into
-  one batch per Durable commit on the next microtask outside it; `self.follow` (working name) and the Durable harness
-  carried in a registry entry. The task graph's `blocked` refresh arrives outside any commit.
-- **The applier for batch apply** (slice 6a builder, 2026-10-27): 6a's applier (`store/applier.ts`) applies the
-  writes an archive holds (`table`, `put`, `index`, `document.create`), checked against the store's records; the
-  replica's batch apply extends it to every `StoreWrite` kind (`alter`, `dropIndex`, `update`/`updateWhere` with their
-  recorded counts and `v`, `delete`/`deleteWhere`, `document.change`, `document.retire`), one code path with import.
-- Not carry-over any more: Durable's synchronous view-change hook is the upstream "Durable observers" change
-  (publication at adoption, `observeXXX`), which lands before 6a.
+Specified in `slice-6b.md` (decided 2026-10-27, D1-D9, R1-R4, "owner names and claims"); each entry below is taken there.
+
+- **Persisted jobs** (from slice 5): `persist: { resume }`, records and state documents in the owner's store (D5), the
+  restart limit (D6), `abort` stored (D7), deferred state (D8), the seal as a clean stop (R3), the `finish` failure
+  count persisted, the job fingerprint and the start trace carrier stored.
+- **`StoreStorage`** (D1-D4, R1, R2, claims): Durable's `Storage` on the store, passing its conformance suite; one id
+  allocator (D3); Durable's checks in the step; fork copies resolved before the step (S11); `adopt` in the host's batch.
+- **`self.follow`** (D9, R4): a Chord source over Durable's synchronous observers. Reaching Durable from other objects
+  (the harness in a registry entry) moves to slice 8.
+- **The applier for batch apply**: every `StoreWrite` kind, `applyBatch`, one code path with import.
 
 ### Slice 7: reload and rollout
 
@@ -232,6 +223,9 @@ deleted (the slice's spec and code are the record). Moved here from `carry-over.
   backoff skipped, an attempt now; holders are told `loading`). (Slices 2, 3b.)
 
 ### Slice 8: registries and `host.root`
+
+- **Durable's views from other objects** (from slice 6b): the harness carried in a registry entry, so an object other
+  than the one that opened Durable can `self.follow` its views.
 
 - **`host.root(fn, context, { principal? })`**: a call scope for code outside objects, built with its first users
   (Durable hooks, `chord(fn, context)`); decide what an aborted, uncooperative `fn` means for its references (match
