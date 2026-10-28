@@ -62,8 +62,8 @@ await host.root(async (ctx) => (await ctx.get(Notes, { session })).add(note, ctx
   order); a contribution carries its token's version: an older one is adapted once with the declaration's `accepts`
   when the table is built, an older one without an adapter or a newer one is left out and reported (`HostError`
   `contribution_refused { registry, plugin, version }`).
-- **Contributions:** a plain value, or a Chord watchable (a `writable`, a derive, a document member, another
-  registry's value), followed as a dependent of the table (its change recomposes); a foreign watchable (a Durable watch)
+- **Contributions:** a plain value, or a Chord watchable (a `writable`, a derive, a document member; another
+  registry's value too, a cycle of registries reading each other refused when the second one serves or contributes), followed as a dependent of the table (its change recomposes); a foreign watchable (a Durable watch)
   is refused at `contribute` (declaration policy). The table's entry is `{ plugin, type?, version, value }` (`type` for
   an object contributor; served types carry their plugin's name).
 - **`compose(table, { report })`:** pure, lazy as a derive: the registry's value is marked when its table changes (a
@@ -83,9 +83,11 @@ await host.root(async (ctx) => (await ctx.get(Notes, { session })).add(note, ctx
   table; its serve composes it.
 - **Reading is a dependency (S3, owner, 2026-10-27: "isn't self.registry meant to wait like self.get?"):**
   `self.registry(R)` in a factory declares the registry as a dependency of the attempt, as `self.get`: activation waits
-  until it has a value (bounded by `readyTimeout`); without one in time the object fails `transient` with
-  `unavailable/undeclared` as the dependency's cause and is retried the moment the registry gets its first value
-  (R18). It returns a `RegistryValue<V>` (a native source: a derive source, an `on` source, a `retryOn` source; never a
+  until it has a value; once `load`'s setups ran, a registry with no value cannot get one before a reload (a provider
+  comes only with a plugin), so a reader then fails at once `transient` with `unavailable/undeclared` as the
+  dependency's cause (as `self.get` of a type not served here fails at once, and the start barrier waits for no
+  contribution) and is retried the moment the registry gets its first value (R18); a first `compose` that throws fails
+  its readers the same way. It returns a `RegistryValue<V>` (a native source: a derive source, an `on` source, a `retryOn` source; never a
   state member); methods and routines read `.value` at use. Once the object is live, a later failure of the registry
   (a throwing `compose`) changes nothing for it: `.value` keeps the last good composition. Code outside objects:
   `await host.registry(R, ctx)` waits the same way.
@@ -145,7 +147,8 @@ after `host.close` rejects `released`. No span of its own until slice 9.
 
 - Durable's `HarnessOptions.registry` takes a `RegistryReader` (`snapshot()`, `subscribe(listener)`, the listener
   called synchronously after every publication). A `RegistryValue` offers a synchronous observer of its compositions
-  (`observe(observer)`, as Durable's `observeXXX`: `advance` inside the flush that composed, record only); Durable's
+  (`observe(observer, ctx)`, as Durable's `observeXXX`: `advance` inside the flush that composed, record only; an
+  attached observer counts as watching, so the lazy compose runs for it); Durable's
   `registryReader(value)` (in its `src`) reads `.value` in `snapshot()` and forwards `observe` to `subscribe`. The
   harness object declares the extensions registry with `self.registry(...)`, so it activates (and opens Durable) only
   once the registry has a value. p3's `compose` builds Durable's snapshot without throwing (a duplicate task name is
@@ -155,15 +158,17 @@ after `host.close` rejects `released`. No span of its own until slice 9.
 
   ```ts
   const harness = self.registry(HarnessRegistry);          // a dependency: activation waits for it
+  self.retryOn(harness);                                   // the new harness's contribution wakes the failed follower
   const view = self.follow((observer, ctx) => harness.value.observeConversation(id, observer, ctx));
   ```
 
   When that harness closes, Durable ends the observer `failed` (S1, a Durable change in this slice: a Session close
   ends observers `failed`, `ended` only when the observed owner ended), so the follower fails `transient` and its retry
   follows the new harness.
-- Example `29-registries.ts` (a router registry with two contributing plugins, a conflict reported, a `writable`
-  contribution, a missing declaration healing); example `30-host-root.ts`; example `31-harness-registry.ts` (a
-  Durable harness on the store, its extensions from a registry, its views followed by a second object).
+- Examples: Chord's `29-registries.ts` (a router registry with two contributing plugins, a conflict reported, a
+  `writable` contribution, a missing provider healing) and `30-host-root.ts`; Durable's `test/examples/37-harness-
+  registry.ts` (a Durable harness on the store, its extensions from a registry, its views followed by a second object)
+  and the `registryReader` tests in Durable's tree.
 
 ## 6. Carry-over
 

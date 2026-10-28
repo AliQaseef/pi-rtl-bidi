@@ -1497,7 +1497,7 @@ export default defineFacet((host, self) => {         // `self` (contributions) a
 export const Http = defineRegistry<HttpContribution, Router>("chord.http", { version: 2 });   // shared: identity only
 host.serve(Http, {                                             // the defining plugin's facet: the one provider (slice 8 D1)
   compose: (table, { report }) => buildRouter(table, report),  // pure; always delivers a value; reports conflicts
-  accepts: { 1: (old: HttpContributionV1): HttpContribution => upgrade(old) },
+  accepts: { 1: { contribution: (old: HttpContributionV1) => upgrade(old), value: (router) => routerV1(router) } },
 });
 self.contribute(Http, { routes: { … }, wraps: [ … ] });
 const router = self.registry(Http).value;     // live (host.registry(Http) outside objects)
@@ -1535,6 +1535,12 @@ const router = self.registry(Http).value;     // live (host.registry(Http) outsi
   use site catches synchronous throws and rejections when it calls an entry, reports naming the contributor (the
   composed table keeps each entry's plugin name), and continues with the other entries. Durable already does this for
   extensions (`extension_error`; a throwing tool becomes an error result); `compose` reports through `report`.
+- **Slice 8's rules** (decisions "Slice 8 D1" to "Slice 8 S3", `slice-8.md`): the token is shared, the provider serves it
+  (`host.serve(R, { compose, accepts })`); `self.registry(R)` in a factory is a declared dependency (activation waits
+  for a value; with none after `load`, the reader fails `transient` and is retried when one arrives); contributions
+  never fail a registry (a failed one is left out and reported); a throwing `compose` keeps the last good composition;
+  older readers get the value mapped back (`accepts[old].value`); `retryOn` retries on value calls only; `host.root(fn,
+  context, { principal? })` seals its context at settle, abort and `host.close`.
 - **Registries may carry natives.** An entry lives exactly as long as its contributor; consumers look up at each use
   or follow the composed value and keep nothing from an entry beyond a use.
 - **Contributions that change (owner, 2026-10-19; W4):** registries are host-local, so contributions are usually

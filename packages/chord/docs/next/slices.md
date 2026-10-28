@@ -49,7 +49,7 @@ Order (owner, 2026-10-22: routines and jobs before the store and reload).
 | 6a | **The store** | the store (backends, tables, queries, writes, commit queue, outbox, documents engine, migrations, export), persisted documents, `self.table`, keyed watches and retirement |
 | 6b | **Durable and jobs on the store** | persisted jobs, Durable's `StoreStorage`, the Chord source over Durable's views (`self.follow`) |
 | 7 | **Reload and rollout** | plugin loading, staging, swaps and restarts, revisions, `accepts` in use |
-| 8 | **Registries and `host.root`** | registries, `self.writable`, `retryOn`, a `RegistryReader` for Durable, `host.root` and `chord(fn, context)` (the harness object is p3's base code) |
+| 8 | **Registries and `host.root`** | registries, `self.writable`, `retryOn`, a `RegistryReader` for Durable, `host.root` (`chord(fn, context)` and the harness object are p3's base code) |
 | 9 | **Telemetry** | spans, events, metrics across hosts |
 
 The playground (`apps/chord-playground`) moves to the new code once slice 4 exists. Round-3 cuts (C3-C16) and
@@ -227,14 +227,8 @@ Specified in `slice-6b.md` (decided 2026-10-27, D1-D9, R1-R4, "owner names and c
 - **Durable's views from other objects** (from slice 6b): the harness carried in a registry entry, so an object other
   than the one that opened Durable can `self.follow` its views.
 
-- **`host.root(fn, context, { principal? })`**: a call scope for code outside objects, built with its first users
-  (Durable hooks, `chord(fn, context)`); decide what an aborted, uncooperative `fn` means for its references (match
-  the handler and `CallContext` rules). (Slice 3b, owner.)
-- **`retryOn`** retries a broken object as `ref.retry()` does. (Slice 2.)
-- **`host.activity` on the facet's host** (`FacetHost`), if the harness or a core facet needs it; today only
-  `references` is there. (Slice 4b.)
-- Registries recompose inside the owner's flush, never inside another owner's commit step; changing contributions are
-  native watchables (`self.writable`). (W4.)
+- Specified in `slice-8.md` (decided 2026-10-27): `host.root` (D3), `retryOn` (D2), registries recomposing in the
+  owner's flush (W4); `host.activity` on the facet's host dropped (nothing needs it).
 
 ### Slice 9: telemetry
 
