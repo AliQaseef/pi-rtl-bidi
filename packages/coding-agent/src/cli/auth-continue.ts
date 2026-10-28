@@ -85,11 +85,17 @@ function optionalRegistration(value: unknown, field: string): "dcr" | "cimd" | u
 	return value;
 }
 
+/**
+ * Accepts the payload alone or the whole command it came in, such as
+ * `PI_RADIUS_GATEWAY='…' pi auth --continue '<payload>'`: base64url has no spaces, so the payload is
+ * the last word, without the quotes a shell would remove. Raw JSON is passed through unchanged.
+ */
 function normalizeContinuationInput(inputValue: string): string {
 	const trimmed = inputValue.trim();
 	if (!trimmed) throw new AuthContinueError("Continuation payload is empty");
-	const commandMatch = /^\s*pi\s+auth\s+--continue\s+(.+)$/su.exec(trimmed);
-	return commandMatch ? commandMatch[1].trim() : trimmed;
+	if (trimmed.startsWith("{")) return trimmed;
+	const lastWord = trimmed.split(/\s+/u).at(-1)!;
+	return /^(['"])(.*)\1$/su.exec(lastWord)?.[2] ?? lastWord;
 }
 
 function decodeBase64Json(inputValue: string): unknown {

@@ -170,6 +170,31 @@ describe("credential print commands", () => {
 		expect(decodeAuthContinuationPayload(`pi auth --continue ${encoded}`)).toMatchObject(payload);
 	});
 
+	test("accepts the payload pasted in any command form", () => {
+		const payload = {
+			version: 1,
+			serviceUrl: "https://auth.example",
+			providerId: "auth-service",
+			continuationId: "cont_123",
+			secret: "one-time-secret",
+			returnUrl: "https://auth.example/connections",
+			mcp: { serverUrl: "https://mcp.example/mcp", serverName: "example", authType: "none" },
+		};
+		const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
+		for (const input of [
+			encoded,
+			`  ${encoded}\n`,
+			`'${encoded}'`,
+			`"${encoded}"`,
+			`pi auth --continue '${encoded}'`,
+			`pi auth continue ${encoded}`,
+			`PI_RADIUS_GATEWAY='http://localhost:8787' pi auth --continue '${encoded}'`,
+			JSON.stringify(payload, null, 2),
+		]) {
+			expect(decodeAuthContinuationPayload(input)).toMatchObject(payload);
+		}
+	});
+
 	test("accepts a *.localhost returnUrl for a localhost serviceUrl", () => {
 		const payload = {
 			version: 1,
