@@ -1,13 +1,8 @@
 # Slice 8: registries and `host.root` (spec)
 
-Status: **revised after the spec review** (2026-10-27; D1-D3, the registry failures, S1-S3 decided by the owner; the
-four reviews `/tmp/s8-review-{astra,fable,opus,sol}.md` and a check against the design's rules found `self.registry`
-wrongly specified as a plain read: it is a declared dependency, as `self.get`), written by the redesign session. Built in
-parallel with 6b (mostly new files). The single source for building 8, together with `design.md` (§7, §8, §11, §16,
-§17, §18, §24 read in full), the decision log `decisions.md` (R21, R23, R25, Q8, D1 of "Review round 1", "Registries
-work like Durable's", "Changing contributions, `self.writable`", W4, "Failures are watch calls", "Slice 8 is
-'Registries and `host.root`'"), the feature map and carry-over of `slices.md` (slice 8), and the root `AGENTS.md`
-"Chord v2 Code Style".
+Status: **ready to build** (2026-10-27; D1-D3, the registry failures and S1-S3 decided by the owner; two spec reviews,
+`/tmp/s8-review{,2}-{astra,fable,opus,sol}.md`, found no remaining blocker; S3 refined after the second: with no value
+after `load`, a reader fails at once, as `self.get` of a type not served here)
 
 8 builds the extension point between plugins (registries), in-process values that change (`self.writable`), wake
 signals for failed objects (`retryOn`), and the call scope for code outside objects (`host.root`). The harness object
