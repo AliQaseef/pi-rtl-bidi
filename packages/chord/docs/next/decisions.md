@@ -1758,6 +1758,11 @@ validation and copies the v2 kernel added around Delta.
   observed owner ended (a task document's task); refines R4 (Durable change, upstream). So a follower of a harness
   reached through a registry fails `transient` when that harness closes, and its retry follows the new one. A
   `retryOn` wake that arrives while the object activates is kept and retries it at once if that attempt fails.
+- **Slice 8 S2: registry readers of an older version (owner, 2026-10-27: "a"):** as contract state, the provider maps
+  back: `host.serve(R, { compose, accepts: { [old]: { contribution?: (old) => current, value?: (current) => old } } })`;
+  a reader bundling an older token gets the composed value mapped to its version (computed once per composition and
+  version, only while such a reader exists); without a `value` mapping, or for a reader newer than the provider, its
+  value is failed `contract_mismatch` (reported).
 - **The performance and memory bar, and converging reviews (owner, 2026-10-27: "yes"):** supersedes "as good as
   HEAD in everything" for Chord v2 slices and pi changes. CPU: each hot path (calls, changes, watches, links) within
   about 5% of HEAD, measured in bursts with alternating processes pinned to one CPU; worse is fixed or goes to the
