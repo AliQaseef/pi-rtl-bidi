@@ -324,6 +324,17 @@ export interface TaskRuntime<I, S, R, H extends object> extends DocumentObserver
 	entry(id: EntryId, context: Context): Promise<EntryRecord | undefined>;
 	/** Undefined when the entry is absent, not visible, or has another kind. */
 	entry<D extends JsonValue>(token: Entry<D>, id: EntryId, context: Context): Promise<TypedEntry<D> | undefined>;
+	/**
+	 * Committed raw history of the task's conversation, fork-aware, as `Conversation.entries()`: every entry, also those a
+	 * compaction summary or reset left behind. Entries never change, so a range bounded by entry IDs reads the same
+	 * before and after a compaction, and in a rerun after a crash.
+	 */
+	entries(
+		query: Omit<EntryQuery, "conversationId">,
+		limit: number,
+		cursor: Cursor | undefined,
+		context: Context,
+	): Promise<Page<EntryRecord, Cursor>>;
 	/** Committed raw active transcript and model context, optionally cut off at the visible entry `at`. */
 	context(conversationId: ConversationId, context: Context, options?: { readonly at?: EntryId }): Promise<ContextView>;
 	/** The Harness clock. */
@@ -491,7 +502,7 @@ type SubmissionRecordBase = {
 	readonly requestId?: string;
 };
 
-/** Durable lifecycle of one admitted user input or passive entry write. */
+/** Durable lifecycle of one admitted user input, passive entry write, or continue. */
 export type SubmissionRecord =
 	| (SubmissionRecordBase & {
 			readonly type: "input";
@@ -550,6 +561,35 @@ export type SubmissionRecord =
 				  }
 				| {
 						/** Terminal passive write that could not be placed. */
+						readonly status: "unanswered";
+						readonly entry?: never;
+						readonly answer?: never;
+						readonly reason: string;
+						readonly detail?: JsonValue;
+				  }
+			))
+	| (SubmissionRecordBase & {
+			/** A run started without a user message; it places no entry and is never queued. */
+			readonly type: "continue";
+	  } & (
+				| {
+						/** Owned by an active run. */
+						readonly status: "placed";
+						readonly entry?: never;
+						readonly answer?: never;
+						readonly reason?: never;
+						readonly detail?: never;
+				  }
+				| {
+						/** The run answered. */
+						readonly status: "done";
+						readonly entry?: never;
+						readonly answer: EntryId;
+						readonly reason?: never;
+						readonly detail?: never;
+				  }
+				| {
+						/** The run ended without an answer. */
 						readonly status: "unanswered";
 						readonly entry?: never;
 						readonly answer?: never;
@@ -992,7 +1032,7 @@ export interface Tx {
 	 */
 	createSubmission(create: SubmissionCreate): Promise<SubmissionRecord>;
 	/**
-	 * Settle a queued or placed submission; only a placed input can be answered, and a settled submission stays
+	 * Settle a queued or placed submission; only a placed input or continue can be answered, and a settled submission stays
 	 * unchanged. Resolved against this transaction's latest record of the submission, so it works after table writes.
 	 * Run tasks settle the inputs they answer.
 	 */

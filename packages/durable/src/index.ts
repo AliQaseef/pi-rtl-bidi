@@ -9,7 +9,14 @@ export {
 	ToolResultEntry,
 	UserEntry,
 } from "./entries.ts";
-export { ConversationBusy, ReadAfterWrite, ReadOnlySession, SessionFailed, StorageRequestError } from "./errors.ts";
+export {
+	ConversationBusy,
+	ConversationIdle,
+	ReadAfterWrite,
+	ReadOnlySession,
+	SessionFailed,
+	StorageRequestError,
+} from "./errors.ts";
 export {
 	AgentDoc,
 	configure,
@@ -24,7 +31,7 @@ export {
 	CompactionTask,
 	type SummaryRequest,
 } from "./harness/compaction.ts";
-export { defineExtension, defineTool, hook, section, wrapSection, wrapTool } from "./harness/define.ts";
+export { defineExtension, defineTool, hook, runEndTask, section, wrapSection, wrapTool } from "./harness/define.ts";
 export {
 	type GenerationCheckpoint,
 	type GenerationInput,
@@ -37,6 +44,7 @@ export {
 	type CompactionFailure,
 	type CompactionStatus,
 	LiveDoc,
+	type LiveRun,
 	type LiveState,
 	type NestedToolSlot,
 	type NestedToolSummary,
@@ -105,6 +113,8 @@ export type {
 	Registry,
 	RegistryReader,
 	RegistrySnapshot,
+	RunEndTask,
+	RunSummary,
 	Settings,
 	SettledSubmissionRecord,
 	SettledTask,
