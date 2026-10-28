@@ -1780,6 +1780,11 @@ validation and copies the v2 kernel added around Delta.
   not served here (§7). Stale design text updated: `mapShared` per array, job runs keeping a failed object alive only
   while an attempt is live or activating, `ctx.state.change(fn, ctx)`, revocation closes child links, routes take a
   context, §22's `revoke`/`chain`/`limit`, native watches collapsing only past 100 pending values.
+- **Slice 6b: two numbers accepted (owner, 2026-10-27: "yeah the reopen times are ok"):** reopening a store with
+  `StoreStorage` costs about 0.15 ms more than `SqliteStorage` once per open (0.28 to 0.43 ms: six table declarations,
+  the allocator read, compiling the reads); the one-entry commit's mean is raised by one outlier among 20 samples while
+  its p75 is equal or lower. Neither is a hot path or a steady regression. `StoreStorage.close` waits for its commits
+  only (its reads go straight to the store, which stays open).
 - **The performance and memory bar, and converging reviews (owner, 2026-10-27: "yes"):** supersedes "as good as
   HEAD in everything" for Chord v2 slices and pi changes. CPU: each hot path (calls, changes, watches, links) within
   about 5% of HEAD, measured in bursts with alternating processes pinned to one CPU; worse is fixed or goes to the
