@@ -1727,6 +1727,10 @@ validation and copies the v2 kernel added around Delta.
   its attempt's seal while the object continues (a live failure, then a retry) is written back stopped, and the next
   live attempt resumes it per its `resume` (rerun or abandon) without counting a restart, as after a clean close (D6).
   In-memory runs keep 6a's rule (`failed { aborted, reason: "restart" }`, finished on the next live attempt).
+- **Slice 6b R4: a follow source's end (owner, 2026-10-27: "yes"):** Durable ends an observer `failed` (its Session
+  failed: the object that opened Durable fails `transient`, its retry reopens its natives, Durable included, and attaches
+  again, as Durable's own recovery is to reopen from Storage) or `ended` (the observed owner ended normally, a task
+  document's task: final, the member keeps its last value, its watches end `ended`).
 - **The performance and memory bar, and converging reviews (owner, 2026-10-27: "yes"):** supersedes "as good as
   HEAD in everything" for Chord v2 slices and pi changes. CPU: each hot path (calls, changes, watches, links) within
   about 5% of HEAD, measured in bursts with alternating processes pinned to one CPU; worse is fixed or goes to the
