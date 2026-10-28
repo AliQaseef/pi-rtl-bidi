@@ -136,8 +136,6 @@ const WAIT: Decision = { kind: "wait" };
 
 const DONE: Decision = { kind: "done" };
 
-const IGNORE = (): void => {};
-
 /** A wait for a state: checked at every change, rejected with the reference's end. */
 type Waiter = { readonly check: () => void; readonly end: (error: ChordError) => void };
 
@@ -257,7 +255,7 @@ export class Binding implements Holder {
 	 * rejects them with the cause; waits for a state decide.
 	 */
 	moved(): void {
-		this.#refState?.changed();
+		this.#refState?.moved();
 		const state = this.refState;
 		if (state.kind === "live") {
 			this.#parked?.flush(
@@ -430,7 +428,7 @@ export class Binding implements Holder {
 		this.#parked?.reject(error);
 		this.#parked = undefined;
 		for (const watch of this.#watches) watch.end({ kind: "ended" });
-		this.#refState?.end(ended);
+		this.#refState?.released(ended);
 		// Each removes itself; promise reactions run later.
 		for (const waiter of this.#waiters) waiter.end(error);
 		this.#ended?.resolve();
@@ -495,13 +493,14 @@ export class Binding implements Holder {
 	#watchableState(): ReferenceState {
 		if (this.#refState !== undefined) return this.#refState;
 		const state = this.#state;
-		// A released reference's state never changes: its watches end at once, with no listener to report. Bound, not a
-		// closure: `read` would share the closure's scope and keep the batch after release.
-		const [report, assertOutside] =
-			state.kind === "released"
-				? [IGNORE, IGNORE]
-				: [state.batch.reportListener, state.batch.assertOutside.bind(state.batch, "watch")];
-		this.#refState = new ReferenceState(() => this.refState, report, assertOutside);
+		// A released reference's state never changes: it is made ended, keeping no batch.
+		if (state.kind === "released") {
+			const made = new ReferenceState(() => this.refState, undefined);
+			made.released(state.state);
+			this.#refState = made;
+			return made;
+		}
+		this.#refState = new ReferenceState(() => this.refState, state.batch);
 		return this.#refState;
 	}
 

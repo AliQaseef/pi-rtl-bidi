@@ -1,10 +1,16 @@
 // Hosts (§3): `createHost`, loading facets and the start barrier, links to children, the parent (connected again after
 // a drop) and routes, the origins it relays holds for, getting and holding references as a principal, the heartbeat
-// of every link, revocation (§4), presence (§19) and keep-alive counts, closing; one batch per host, the backoff map
-// and the endings new instances wait for.
+// of every link, revocation (§4), presence (§19) and keep-alive counts, registries and root scopes (slice 8), closing;
+// one batch per host, the backoff map and the endings new instances wait for.
 
 import type { TelemetryContext } from "@earendil-works/pi-telemetry";
-import { BACKGROUND_CONTEXT, type Context, withAbortSignal, withoutAbortSignal } from "../../context/index.ts";
+import {
+	awaitWithContext,
+	BACKGROUND_CONTEXT,
+	type Context,
+	withAbortSignal,
+	withoutAbortSignal,
+} from "../../context/index.ts";
 import type { JsonValue } from "../../json.ts";
 import type { Watchable } from "../../watch.ts";
 import type { Address, Contract, HostKind, ParamsOf } from "../contracts/index.ts";
@@ -21,6 +27,13 @@ import {
 } from "../data/internal.ts";
 import { binaryCodec, type Codec, type Compression, type Link, type PartLimits } from "../link/index.ts";
 import { linkLimits } from "../link/internal.ts";
+import type { Registry, RegistryValue } from "../registries/index.ts";
+import {
+	type RegistryContribution,
+	type RegistryEdge,
+	type RegistryError,
+	RegistryRecord,
+} from "../registries/internal.ts";
 import {
 	type HoldRequest,
 	HostLink,
@@ -34,14 +47,16 @@ import type { ChordStore, Store } from "../store/store.ts";
 import { Activity, type ActivityCounts } from "./activity.ts";
 import { notLive } from "./attempt.ts";
 import { Backoff } from "./backoff.ts";
-import { type Caller, withLinkedAbortSignal } from "./ctx.ts";
-import { type Facet, type ServedEntry, setUp } from "./facet.ts";
+import { type Caller, type Ctx, withLinkedAbortSignal } from "./ctx.ts";
+import { type Facet, type FacetContribution, type ServedEntry, setUp } from "./facet.ts";
+import { contributionOf } from "./members.ts";
 import type { CloseFailed } from "./native.ts";
 import { ChordObject, type Holder, type LocalContract, type RemoteContract, type Served } from "./object.ts";
 import { type Placed, Placement } from "./placement.ts";
 import { type Presence, References } from "./presence.ts";
 import { Binding, type CheckedParams, type Held, type Reference, type Target } from "./reference.ts";
 import { RevocationKeys, type RevokedBy } from "./revocation.ts";
+import { type RootOptions, RootScopes } from "./root.ts";
 import { Route, type RouteOptions } from "./route.ts";
 import { uuidv7 } from "./uuid.ts";
 
@@ -93,6 +108,7 @@ export type Position = { readonly kind: "on" | "onLive" | "native"; readonly pos
  */
 export type HostError =
 	| BatchError
+	| RegistryError
 	| { readonly kind: "activation_failed"; readonly object: string; readonly failure: FailureCause }
 	/** A live object failed at runtime (a `migrate` failing on access, a stored version newer than the code). */
 	| { readonly kind: "object_failed"; readonly object: string; readonly failure: FailureCause }
@@ -163,7 +179,7 @@ export type GetOptions = {
  * A host whatever its principal type, as Chord's own parts use it: `ChordHost<P>` is invariant in `P` (`load` takes
  * facets typed for exactly `P`).
  */
-export type AnyHost = Omit<ChordHost, "load" | "accept" | "connect" | "route" | "references">;
+export type AnyHost = Omit<ChordHost, "load" | "accept" | "connect" | "route" | "references" | "root">;
 
 /** A host. `P` is the app's principal type, `R` its revocation type. */
 export interface Host<P extends Principal = Principal, R extends JsonValue = JsonValue> {
@@ -228,8 +244,21 @@ export interface Host<P extends Principal = Principal, R extends JsonValue = Jso
 	 */
 	readonly activity: Watchable<ActivityCounts>;
 	/**
-	 * Closes its links, then ends every object at once, then drains and closes them one by one, the last to go live
-	 * first (reason `close`). Rejects with an `AggregateError` of the closes that threw.
+	 * Registry `R`'s composed value as `R`'s version sees it, for code outside objects; waits for `load` first. Rejects
+	 * when it has no value then (`unavailable/undeclared` without a provider, a first `compose` that threw, a version
+	 * not served here: `contract_mismatch`); none can come before a reload.
+	 */
+	registry<C, V>(R: Registry<C, V>, context: Context): Promise<RegistryValue<V>>;
+	/**
+	 * Runs `fn` with a call context for code outside objects (a Durable tool, a CLI): the host's principal (or
+	 * `options.principal`), this host's incarnation, `context`'s telemetry and signal, `ctx.get`. When `fn` settles or
+	 * `context` aborts, the context is sealed: its signal aborted, `ctx.get` refused `released`, every reference it took
+	 * released; an abort rejects at once. `host.close` seals the open ones; after it, `root` rejects `released`.
+	 */
+	root<T>(fn: (ctx: Ctx<P>) => Promise<T>, context: Context, options?: RootOptions<P>): Promise<T>;
+	/**
+	 * Closes its links, seals its root scopes, then ends every object at once, then drains and closes them one by one,
+	 * the last to go live first (reason `close`). Rejects with an `AggregateError` of the closes that threw.
 	 */
 	close(context: Context): Promise<void>;
 }
@@ -240,6 +269,9 @@ export function createHost<P extends Principal = Principal, R extends JsonValue 
 ): Host<P, R> {
 	return new ChordHost<P, R>(options);
 }
+
+/** No registry edges pending (a facet's contributions). */
+const NO_EDGES: readonly RegistryEdge[] = [];
 
 /** No activation chain (Q5). */
 const NO_CHAIN: readonly string[] = [];
@@ -291,6 +323,9 @@ export class ChordHost<P extends Principal = Principal, R extends JsonValue = Js
 	/** Aborted when the host closes: the context of every route's `resolve`. */
 	readonly #routing = new AbortController();
 	readonly #heartbeat: { readonly ping: number; readonly close: number };
+	/** Its registries by name, each made by its first use (a serve, a contribution or a reader). */
+	readonly #registries = new Map<string, RegistryRecord>();
+	readonly #roots = new RootScopes(this);
 	/** The one heartbeat timer, running while the host has a link. */
 	#ticking: ReturnType<typeof setInterval> | undefined;
 	#state: "new" | "loading" | "loaded" | "closed" = "new";
@@ -321,7 +356,13 @@ export class ChordHost<P extends Principal = Principal, R extends JsonValue = Js
 		if (this.#state !== "new") throw new Error("load runs once per host");
 		this.#state = "loading";
 		try {
-			this.#setUp(facets);
+			const contributions = this.#setUp(facets);
+			// The facets' contributions and the first composition of every served registry, in one batch, before any
+			// object activates.
+			this.batch.commit(() => {
+				for (const contribution of contributions) contribution.record.add(contribution);
+				for (const record of this.#registries.values()) record.composeServed();
+			}, context);
 		} catch (error) {
 			// The host closes as `close` would: its links too. Nothing was activated, so no close can fail.
 			this.#closing ??= this.#close();
@@ -420,6 +461,35 @@ export class ChordHost<P extends Principal = Principal, R extends JsonValue = Js
 		}
 		// Entries of `Type`'s objects, acting as `P`s.
 		return references as unknown as Watchable<readonly Presence<C, P>[]>;
+	}
+
+	async registry<C, V>(R: Registry<C, V>, context: Context): Promise<RegistryValue<V>> {
+		this.batch.assertOutside("registry");
+		const loading = this.pendingLoad;
+		if (loading !== undefined) await awaitWithContext(loading, context);
+		this.#assertOpen();
+		const value = this.registryRecord(R.name).value(R.version);
+		const start = value.start();
+		if (start.kind === "failed" && start.last === undefined) throw start.error;
+		// Its values are the composition as `R`'s version has it, `V`.
+		return value as RegistryValue<V>;
+	}
+
+	async root<T>(fn: (ctx: Ctx<P>) => Promise<T>, context: Context, options: RootOptions<P> = {}): Promise<T> {
+		this.batch.assertOutside("root");
+		this.#assertOpen();
+		// The scope's ctx acts as `principal`, a `P`.
+		return this.#roots.run(fn as (ctx: Ctx) => Promise<T>, options.principal ?? this.principal, context);
+	}
+
+	/** The record of registry `name` on this host, made by its first use. */
+	registryRecord(name: string): RegistryRecord {
+		let record = this.#registries.get(name);
+		if (record === undefined) {
+			record = new RegistryRecord(name, this.batch, (error) => this.report(error));
+			this.#registries.set(name, record);
+		}
+		return record;
 	}
 
 	async close(_context: Context): Promise<void> {
@@ -782,6 +852,8 @@ export class ChordHost<P extends Principal = Principal, R extends JsonValue = Js
 		for (const role of ["child", "route", "parent"]) for (const link of links) if (link.role === role) link.close();
 		// Remote references end now: their parked calls reject `released`, no later link holds them.
 		const closed = this.#closedError();
+		// Code outside objects stops at its next use of Chord: an `fn` waiting in `sleep(ms, ctx)` ends.
+		this.#roots.close(closed);
 		const holders = [
 			...this.#parent.holders(),
 			...this.unplaced.holders(),
@@ -795,6 +867,8 @@ export class ChordHost<P extends Principal = Principal, R extends JsonValue = Js
 		const failures: CloseFailed[] = [];
 		for (const tearDown of teardowns) failures.push(...(await tearDown()));
 		this.#types.clear();
+		for (const record of this.#registries.values()) record.close();
+		this.#registries.clear();
 		this.store?.detach();
 		// Gets waiting for a load that will not come fail now.
 		this.#loaded.resolve();
@@ -822,24 +896,43 @@ export class ChordHost<P extends Principal = Principal, R extends JsonValue = Js
 		else object.attempt();
 	}
 
-	/** Runs every facet's setup, checking the plugin names (npm names, each once), and serves what they declared. */
-	#setUp(facets: readonly { readonly name: string; readonly facet: Facet<P> }[]): void {
+	/**
+	 * Runs every facet's setup, checking the plugin names (npm names, each once), and serves what they declared; returns
+	 * their contributions, which enter the registries' tables once the setups ran.
+	 */
+	#setUp(facets: readonly { readonly name: string; readonly facet: Facet<P> }[]): RegistryContribution[] {
 		const names = new Set<string>();
+		const made: RegistryContribution[] = [];
 		for (const { name, facet } of facets) {
 			if (!PLUGIN_NAME.test(name)) throw new Error(`"${name}" is not a valid plugin name`);
 			if (names.has(name)) throw new Error(`plugin "${name}" is loaded twice`);
 			names.add(name);
-			for (const entry of setUp(name, facet, (Type) => this.references(Type))) this.#serve(entry);
+			const { served, contributions } = setUp(name, facet, (Type) => this.references(Type));
+			for (const entry of served) this.#serve(name, entry);
+			for (const contribution of contributions) made.push(this.#contribution(name, contribution));
 		}
+		return made;
 	}
 
-	#serve({ contract, factory, options }: ServedEntry): void {
+	/** A facet's contribution, checked: in its registry's table while the host lives (its plugin stays loaded). */
+	#contribution(plugin: string, { registry, value }: FacetContribution): RegistryContribution {
+		// A facet contributes no registry's value (it reads none): no edges of its own.
+		const record = this.registryRecord(registry.name);
+		return contributionOf(record, { plugin, type: undefined }, registry.version, value, NO_EDGES);
+	}
+
+	#serve(plugin: string, entry: ServedEntry): void {
+		if (entry.kind === "registry") {
+			this.registryRecord(entry.registry.name).serve(entry.registry.version, entry.provider);
+			return;
+		}
+		const { contract, factory, options } = entry;
 		if (this.#types.has(contract.name)) throw new Error(`${contract.name} is served twice`);
 		// A client serves only local types (§3): a remote object is owned by a principal of the host serving it.
 		if (contract.kind === "remote" && this.principal === undefined) {
 			throw new Error(`${contract.name}: a host without a principal serves only local types`);
 		}
-		const common = { provider: bindProvider(contract, {}), linger: options.linger ?? 0 };
+		const common = { plugin, provider: bindProvider(contract, {}), linger: options.linger ?? 0 };
 		// The contract's kind decides the factory's signature and the contract's shape.
 		const served: Served =
 			contract.kind === "local"

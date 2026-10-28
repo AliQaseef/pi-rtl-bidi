@@ -61,7 +61,7 @@ describe("ctx", () => {
 		expect(await rejection(seen.ctx!.get(Item, { id: 1 }))).toEqual({
 			code: "released",
 			reason: "settled",
-			message: "app.item: ctx.get after its handler settled",
+			message: "app.item: ctx.get after its call settled",
 		});
 	});
 
@@ -103,7 +103,7 @@ describe("ctx", () => {
 		expect(await seen.late).toMatchObject({
 			code: "released",
 			reason: "settled",
-			message: "app.item: ctx.get after its handler settled",
+			message: "app.item: ctx.get after its call settled",
 		});
 		await flushed();
 		// The late reference's object ended with it.
@@ -130,7 +130,7 @@ describe("ctx", () => {
 		expect(await pending).toMatchObject({
 			code: "released",
 			reason: "settled",
-			message: "app.far: ctx.get after its handler settled",
+			message: "app.far: ctx.get after its call settled",
 		});
 	});
 

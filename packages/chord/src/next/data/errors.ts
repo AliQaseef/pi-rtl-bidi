@@ -18,7 +18,8 @@ export const CHORD_ERROR_REASONS = {
 	// `discarded`: a transaction cut at the seal.
 	released: ["ended", "closed", "settled", "version", "discarded"],
 	too_large: ["part"],
-	unavailable: ["locked", "park_timeout", "busy", "storage_failed"],
+	// `undeclared`: a registry no plugin serves on this host.
+	unavailable: ["locked", "park_timeout", "busy", "storage_failed", "undeclared"],
 	aborted: [],
 } as const;
 

@@ -207,7 +207,8 @@ parent link closes. `resolve` returns the link before the worker has loaded (the
 | `hold(Type, params, context, { readyTimeout? })` | a reference at once that follows its object until released (section 7) |
 | `close(context)` | closes the links (children, routes, then the parent), then ends every object at once and tears them down, the last to go live first (reason `close`); rejects with an `AggregateError` of the native closes that threw |
 | `revoke(r, context)` | revocation (section 4; slice 4b) |
-| `root(fn, …)` | a call scope for code outside objects (a Durable hook, a CLI); built in slice 8 (**decision needed** on its signature, section 26) |
+| `root(fn, context, { principal? })` | a call scope for code outside objects (a Durable hook, a CLI): `fn` gets a handler's `ctx`, sealed when `fn` settles, `context` aborts or the host closes (slice 8 D3, section 8) |
+| `registry(R, context)` | registry `R`'s composed value for code outside objects; waits for `load`, rejects when it has none (slice 8, section 17) |
 
 **Options of `createHost`:** `address`, `principal`, `principalKey` (section 4; the same function on every host),
 `telemetry` (section 29), `onError`, `closeTimeout`, `readyTimeout`, `heartbeat: { ping?, close? }`; later `revokedBy`
@@ -216,7 +217,7 @@ and closed by the app with `store.close(ctx)` after `host.close`; the host never
 background, as a tagged `HostError`: `listener_error` (a watch listener threw), `delivery_failed` (a frame delivery
 threw), `activation_failed { object, failure }`, `close_failed { object, native, error }`, `close_timeout { object,
 native }`, `drain_timeout { object }`, `protocol_error { error }`, `resolve_failed { address, error }`; later routine
-errors (slice 5), `derive_failed { object, member?, error }` (a derive's compute threw, once per failure episode, slice 6a), `object_failed { object, failure }` (a live object failing, slice 6a, `broken`; `transient` when a `self.follow` source failed, slice 6b R4; `failure` where the value is a `FailureCause`, `error` otherwise, 2026-10-27), `job_interrupted { object, job, id, restarts }` (a persisted run ended at the restart limit, slice 6b D6) and `storage_failed { error }`
+errors (slice 5), `derive_failed { object, member?, error }` (a derive's compute threw, once per failure episode, slice 6a), the registries' `registry_conflict { registry, message, plugins }`, `registry_failed { registry, error }`, `contribution_failed { registry, plugin, type?, error }` and `contribution_refused { registry, plugin, type?, version }` (each once per episode, slice 8), `object_failed { object, failure }` (a live object failing, slice 6a, `broken`; `transient` when a `self.follow` source failed, slice 6b R4; `failure` where the value is a `FailureCause`, `error` otherwise, 2026-10-27), `job_interrupted { object, job, id, restarts }` (a persisted run ended at the restart limit, slice 6b D6) and `storage_failed { error }`
 (slice 6a), which every app must handle: Chord never ends the process,
 the app exits with its own code for its supervisor or reopens.
 
@@ -546,7 +547,7 @@ host.serve(Notes, ({ session }, principal, self) =>
   link protocol (adding one bumps the protocol version; a receiver rejects unknown reasons; a test pins the list):
   `invalid` (`args`, `params`, `member`, `placement`, `reentrant`, `read_after_bulk`, `cycle`), `contract_mismatch`
   (`updating`), `forbidden` (`revoked`), `gone`, `not_ready`, `released` (`ended`, `closed`, `settled`, `version`, `discarded`; none for a holder's own release), `too_large` (`part`), `unavailable` (`locked`,
-  `park_timeout`, `busy`, `storage_failed`), `aborted`. A failed check names TypeBox's instance path ("unknown field", "missing", else TypeBox's
+  `park_timeout`, `busy`, `storage_failed`, `undeclared`: a registry no plugin serves here, slice 8), `aborted`. A failed check names TypeBox's instance path ("unknown field", "missing", else TypeBox's
   message; keys containing `/` or `~` make the path ambiguous, documented). Plugins throw `PluginError(code, message,
   details?)` for codes of their own; anything else crosses a link as the plugin code `internal` with its message, never
   a stack or a cause; plugin errors never use Chord's codes. An error rebuilt from the wire is not copied and only its
@@ -1505,7 +1506,7 @@ host.serve(Http, {                                             // the defining p
   accepts: { 1: { contribution: (old: HttpContributionV1) => upgrade(old), value: (router) => routerV1(router) } },
 });
 self.contribute(Http, { routes: { … }, wraps: [ … ] });
-const router = self.registry(Http).value;     // live (host.registry(Http) outside objects)
+const router = self.registry(Http);           // a declared dependency; read router.value at use (await host.registry(Http, ctx) outside objects)
 ```
 
 - Each contributor (a facet or an object) contributes **at most one value per registry**; the table is an immutable,
@@ -1521,7 +1522,9 @@ const router = self.registry(Http).value;     // live (host.registry(Http) outsi
   a plain value and never handle conflicts. If `compose` throws, the failure is reported and its
   watches get a `failed` call, while `.value` keeps the last good composition (slice 8); only before any good
   composition do readers get the error. Work that started earlier keeps the value it read (a pinned Durable phase keeps
-  its old table). Helpers: `keyedEntries(table, entriesOf, report)`, `orderedEntries(table, itemsOf, orderOf?)`.
+  its old table). Helpers: `keyedEntries(table, entriesOf, report)` (a map, the first by plugin name wins, a duplicate
+  reported), `orderedEntries(table, itemsOf, orderOf?)`; both keep each item's plugin (named so beside the contracts'
+  `keyed`, slice 8 build).
 - **Who contributes (R21):** only facets and host-lifetime objects (`local`, empty params); their factory's `self` has `contribute`, a
   referenced object's `self` does not (a type error). Reading a registry's composed value stays open to every object.
 - **A contribution is in the table exactly while its contributor is live:** a facet's while its plugin is loaded; an
@@ -1962,14 +1965,20 @@ loop. Chord has no stream type (it would need its own rules for drops, cancellat
   loading object (refines R17). A missing tool gives its call an error result the model sees; a missing model makes the generation
   report "model unavailable" and wait (not fail) until a model contribution appears; a task whose definition is missing
   stays blocked (`missing_task`) until the plugin is installed or the task is aborted, as Durable does.
+- **Durable's views from other objects** (slice 8 §5): the harness object contributes its `Native<Harness>` to a
+  registry of p3's; another object declares that registry (`self.registry`), wakes on it (`self.retryOn`) and follows
+  a view through its value (`self.follow`). A Session close ends Durable's synchronous observers `failed` ("session
+  closed"; decision "Slice 8 S1"; app watches still end `ended`), so the follower fails `transient` and follows the
+  next Harness once its contribution arrives. `registryReader`'s listener runs inside Chord's batch: it only wakes
+  Durable's scheduler (a Chord call there throws `invalid/reentrant`).
 - `HarnessModels` and `HarnessEnvironments` start with one contribution each, from the models and envs plugins'
   objects that own the natives; several providers or environment kinds are their `compose`. After a models reload
   the next request uses the new runtime; a running stream finishes on the old one.
 - **Chord from Durable code (Q6):** tools, hooks and sections get Durable's `ToolExecutionApi` and a `Context`, never a
   Chord `ctx`. p3's core opens the harness with a base context holding the host under a typed key
   (`withContextValue(ChordHostKey, host, …)`); every phase context inherits it. A core helper opens a call scope from
-  any Durable context: `chord(async (ctx) => …, context)` = `host.root(fn, { signal: context.abortSignal, telemetry:
-  context.telemetry })` (host principal; attribution as data; references released when `fn` settles). No wrapping of
+  any Durable context: `chord(async (ctx) => …, context)` = `host.root(fn, context)` (host principal; attribution as
+  data; references released when `fn` settles; slice 8 D3). No wrapping of
   tools and no p3 `defineTool`. Clients are never reachable this way (they are not addressable): a tool that needs the
   user goes through an owner's state, e.g. the Questions service (`apps/p2/docs/questions.md`): the model-facing
   `ask_user` tool and any other tool call `Questions.ask`/`wait`, tabs render the open questions and `answer` them.

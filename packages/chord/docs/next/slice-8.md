@@ -1,6 +1,7 @@
 # Slice 8: registries and `host.root` (spec)
 
-Status: **ready to build** (2026-10-27; D1-D3, the registry failures and S1-S3 decided by the owner; two spec reviews,
+Status: **built** (2026-10-28; build review and two fix rounds by the same four reviewers,
+`/tmp/s8-build-review-*.md`, `/tmp/s8-build-rereview-*.md`). Before: ready to build (2026-10-27; D1-D3, the registry failures and S1-S3 decided by the owner; two spec reviews,
 `/tmp/s8-review{,2}-{astra,fable,opus,sol}.md`, found no remaining blocker; S3 refined after the second: with no value
 after `load`, a reader fails at once, as `self.get` of a type not served here)
 

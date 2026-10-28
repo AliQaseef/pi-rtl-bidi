@@ -1,5 +1,6 @@
 // The member check (Q14): an implementation is one variant with exactly that variant's members, methods being
-// functions and state members JSON watchables; and the resolution of every derive's declared sources.
+// functions and state members JSON watchables; and the resolution of what Chord follows behind every derive's declared
+// sources (JSON and native) and every contribution to a registry (slice 8).
 //
 // The rule for watches across attempts (slice 6a §1.2, §1.4): references and other objects' derives follow a local
 // object's state member through its member source (`member-source.ts`), and a key of a keyed member they hold (`at`,
@@ -17,7 +18,15 @@ import type { Context } from "../../context/index.ts";
 import type { Contract } from "../contracts/index.ts";
 import { currentVariants, LOCAL, takesNoArgs, type VariantData } from "../contracts/internal.ts";
 import type { KeyedSlot } from "../documents/internal.ts";
-import type { Derive, DeriveSource } from "../state/internal.ts";
+import {
+	type ContributionContent,
+	type Contributor,
+	RegistryContribution,
+	type RegistryEdge,
+	type RegistryRecord,
+	RegistryValueSource,
+} from "../registries/internal.ts";
+import { type Derive, type DeriveInput, type DeriveSource, NativeSource } from "../state/internal.ts";
 import { type Binding, resolveKeyed, resolveWatchable } from "./reference.ts";
 
 /** A checked implementation, as Chord calls and follows it. */
@@ -114,11 +123,35 @@ export function attachDerives(
 	derives.forEach((derive, position) => {
 		const member = exposed.get(derive);
 		const name = member ?? `derive #${position + 1}`;
-		const resolve = (source: unknown, index: number): DeriveSource => {
-			const resolved = resolveWatchable(source);
-			if (resolved === undefined) throw new Error(`${name}: source ${index} is not a JSON watchable`);
+		const resolve = (source: unknown, index: number): DeriveInput => {
+			const resolved = resolveWatchable(source) ?? (source instanceof NativeSource ? source : undefined);
+			if (resolved === undefined) throw new Error(`${name}: source ${index} is not a Chord watchable`);
 			return resolved;
 		};
 		derive.attach(resolve, report(member));
 	});
+}
+
+/**
+ * A contribution of `contributor` at `version` to `record`, as Chord follows it: a Chord watchable (a source, a
+ * constant, a document handle, a reference member, a native source) is followed, anything else is a plain value,
+ * whatever methods it has (registries carry natives). Refused (`invalid/cycle`) when it is a registry's value that
+ * closes a cycle of registries, through the tables and the contributor's `pending` edges.
+ */
+export function contributionOf(
+	record: RegistryRecord,
+	contributor: Contributor,
+	version: number,
+	value: unknown,
+	pending: readonly RegistryEdge[],
+): RegistryContribution {
+	if (value instanceof RegistryValueSource) record.assertNoCycle(value, pending);
+	return new RegistryContribution(record, contributor, version, contentOf(value));
+}
+
+/** What Chord follows behind a contribution: its JSON or native source when it is a Chord watchable. */
+function contentOf(value: unknown): ContributionContent {
+	if (value instanceof NativeSource) return { kind: "native", source: value };
+	const source = resolveWatchable(value);
+	return source === undefined ? { kind: "plain", value } : { kind: "json", source };
 }

@@ -1,5 +1,5 @@
 import { createHook } from "node:async_hooks";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { type Context, BACKGROUND_CONTEXT as context, withCancel } from "../../../src/context/index.ts";
 import { arr, int, local, method, obj, opt, remote, str } from "../../../src/next/contracts/index.ts";
 import { broken, isChordError } from "../../../src/next/data/index.ts";
@@ -12,6 +12,7 @@ import {
 	type Self,
 	type StoreSelf,
 } from "../../../src/next/host/index.ts";
+import { defineRegistry } from "../../../src/next/registries/index.ts";
 import { constant } from "../../../src/next/state/index.ts";
 import type { StagedWrite } from "../../../src/next/store/step.ts";
 import type { ChordStore } from "../../../src/next/store/store.ts";
@@ -425,6 +426,36 @@ describe("declarations", () => {
 				() => {},
 			),
 		).toThrow("self.open is valid only in the factory");
+		const Names = defineRegistry<string, number>("app.names", { version: 1 });
+		expect(() => later!.registry(Names)).toThrow("self.registry is valid only in the factory");
+		expect(() => later!.writable(1)).toThrow("self.writable is valid only in the factory");
+		expect(() => later!.retryOn()).toThrow("self.retryOn is valid only in the factory");
+	});
+
+	it("contribute only in host-lifetime objects (R21): `Self` has no `contribute`, a declaration error at runtime", async () => {
+		expectTypeOf<Self>().not.toHaveProperty("contribute");
+		expectTypeOf<StoreSelf>().toHaveProperty("contribute");
+		const Names = defineRegistry<string, number>("app.names", { version: 1 });
+		const Store = local("app.store", { version: 1, params: {}, members: {} });
+		const { host } = await loaded((h) => {
+			h.serve(Names, { compose: (table) => table.length });
+			h.serve(Page, (_, self) => {
+				(self as unknown as StoreSelf).contribute(Names, "page");
+				return { label: constant(""), slow: async () => null };
+			});
+			h.serve(Store, (_, self) => {
+				self.contribute(Names, "a");
+				self.contribute(Names, "b");
+				return {};
+			});
+		});
+		await expect(host.get(Page, { id: 1 }, context)).rejects.toThrow(
+			"app.page(1): self.contribute is valid only in a local type with empty params",
+		);
+		await expect(host.get(Store, {}, context)).rejects.toThrow(
+			"app.store: registry app.names is contributed to twice",
+		);
+		await host.close(context);
 	});
 
 	it("refuse a document definition declared twice", async () => {

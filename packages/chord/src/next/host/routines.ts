@@ -14,7 +14,7 @@ import {
 	type WatchEnd,
 } from "../../watch.ts";
 import type { Principal } from "../data/index.ts";
-import { Source } from "../state/internal.ts";
+import { NativeSource, Source } from "../state/internal.ts";
 import { nextDelay } from "./backoff.ts";
 import { CallContext, type Caller, type Ctx } from "./ctx.ts";
 import type { AnyHost, Position } from "./host.ts";
@@ -93,6 +93,9 @@ type Declaration =
 type Called = { readonly kind: "done" } | { readonly kind: "failed"; readonly error: unknown };
 
 const DONE: Called = { kind: "done" };
+
+/** What `#failing` says of a source failed now. */
+const FAILING = { kind: "failed" } as const;
 
 /** One run of an `onLive` that lasted this long resets its backoff. */
 const LONG_RUN = 60_000;
@@ -267,10 +270,14 @@ class OnRoutine {
 	}
 
 	/**
-	 * Whether the source is a Chord source failed now (`failed`), or one with no value yet (`no_value`, with the source to
-	 * follow); `undefined` otherwise (natives and Durable's views tell their failures through their watches).
+	 * Whether the source is a Chord source failed now (`failed`), or a JSON one with no value yet (`no_value`, with the
+	 * source to follow); `undefined` otherwise (Durable's views tell their failures through their watches).
 	 */
 	#failing(): { readonly kind: "failed" } | { readonly kind: "no_value"; readonly source: Source } | undefined {
+		const declared = this.#declaration.source;
+		// A native source opens its watch at its last good value while failed (a registry whose `compose` threw): its
+		// first call is the failure, not that stale value.
+		if (declared instanceof NativeSource) return declared.start().kind === "failed" ? FAILING : undefined;
 		let source: unknown;
 		try {
 			source = resolveWatchable(this.#declaration.source);

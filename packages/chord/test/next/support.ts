@@ -35,6 +35,7 @@ import {
 	createHost,
 	defineFacet,
 	type FacetHost,
+	type FacetSelf,
 	type Host,
 	type HostError,
 	type RefState,
@@ -231,7 +232,7 @@ async function restartableOf<C extends typeof Restartable | typeof StoreRestarta
 
 /** A host with background errors collected, loaded with one facet (`@test/app`) whose setup is `setup`. */
 export async function loaded(
-	setup: (host: FacetHost) => void,
+	setup: (host: FacetHost, self: FacetSelf) => void,
 	options: {
 		readonly telemetry?: InMemoryTelemetryContext;
 		readonly context?: Context;
@@ -244,6 +245,21 @@ export async function loaded(
 	const { telemetry, closeTimeout, readyTimeout, store } = options;
 	const host = createHost({ telemetry, closeTimeout, readyTimeout, store, onError: (error) => errors.push(error) });
 	await host.load([{ name: "@test/app", facet: defineFacet(setup) }], options.context ?? BACKGROUND_CONTEXT);
+	return { host, errors };
+}
+
+/**
+ * A host with background errors collected, loaded with one facet per plugin, in the order given (`setups` by plugin
+ * name).
+ */
+export async function loadedPlugins(
+	setups: Readonly<Record<string, (host: FacetHost, self: FacetSelf) => void>>,
+	options: { readonly telemetry?: InMemoryTelemetryContext; readonly readyTimeout?: number } = {},
+): Promise<{ readonly host: Host; readonly errors: HostError[] }> {
+	const errors: HostError[] = [];
+	const host = createHost({ ...options, onError: (error) => errors.push(error) });
+	const facets = Object.entries(setups).map(([name, setup]) => ({ name, facet: defineFacet(setup) }));
+	await host.load(facets, BACKGROUND_CONTEXT);
 	return { host, errors };
 }
 

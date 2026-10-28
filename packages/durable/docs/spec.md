@@ -5431,9 +5431,11 @@ advances without a commit, when a registry change or a failed migration changes
 a task's `blocked` reason (section 9.4): that call runs on the Session line,
 outside any `adopt`, with a context of its own. A document observer follows its
 address as a document watch does, and `observeDoc()` gives `undefined` for an
-absent one. `end` comes once: when the Session closes (`ended`) or fails
-(`failed` with the error), or, for a task document, right after the retirement change of
-the commit that makes its task terminal, inside that commit's `adopt` (`ended`).
+absent one. `end` comes once: when the Session closes (`failed` with the error
+"session closed": an adapter following the Session, such as Chord's `self.follow`,
+fails and follows the next Session; watches end `ended`) or fails (`failed` with
+the error), or, for a task document, right after the retirement change of the
+commit that makes its task terminal, inside that commit's `adopt` (`ended`).
 `detach()` is idempotent, and nothing follows it, not even the rest of the
 commit underway; a detached observer is referenced by nothing of the Session.
 `context` governs only the attachment: cancelling it while attaching rejects

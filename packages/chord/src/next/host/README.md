@@ -4,8 +4,10 @@ Hosts, facets, objects, natives and references: hosts serving `local` and `remot
 principals and variants, links to children, to a parent and over routes to addressable hosts (with relays between
 them), the heartbeat, the `ctx` of method handlers, (slice 4b) revocation, cycles across hosts, presence,
 keep-alive counts, size limits per part and compression at the origin, (slice 5) routines and the objects' jobs
-(declared here, built in `jobs/`), and (slice 6a) the host's store: tables, persisted documents and eager table
-migrations at activation (built in `store/` and `documents/`), and live objects that fail.
+(declared here, built in `jobs/`), (slice 6a) the host's store: tables, persisted documents and eager table
+migrations at activation (built in `store/` and `documents/`), and live objects that fail, and (slice 8) registries
+(served, contributed and read here, built in `registries/`), writables, wake signals (`retryOn`) and root scopes
+(`host.root`).
 
 ## For apps (`index.ts`)
 
@@ -189,8 +191,41 @@ server.accept(webSocketLink(ws), { principal, limits: { part: 16 * MiB, decoded:
   route's `resolve` rejected; the address waits its backoff), `routine_failed` (`object`, `routine`: its position,
   `error`: a routine call threw, or its watch could not be taken; a source's failure calls never reach a routine), `job_failed` (`object`, `job`,
   `id`, `error`: a run threw, not after an abort), `job_finish_failed` (the same: a `finish` threw; it is retried) and
-  `job_dropped` (`object`, `job`, `id`: a blocked run dropped without `finish`, by `abort` or its object's end). A
-  throwing `onError` is ignored.
+  `job_dropped` (`object`, `job`, `id`: a blocked run dropped without `finish`, by `abort` or its object's end), and
+  the registries' (slice 8, each once per episode) `registry_conflict` (`registry`, `message`, `plugins`: a conflict
+  `compose` resolved), `registry_failed` (`registry`, `error`: `compose` or an older version's `value` adapter threw),
+  `contribution_failed` (`registry`, `plugin`, `type?`, `error`: a watchable contribution failed or ended, or its
+  adapter threw) and `contribution_refused` (`registry`, `plugin`, `type?`, `version`). A throwing `onError` is
+  ignored.
+- **Registries** (slice 8, `registries/`): a facet serves a registry it defines with `host.serve(R, { compose,
+  accepts? })` (one provider per host; a second serve throws at `load`); a facet's `self.contribute(R, value)` (its
+  setup's second argument, `FacetSelf`) is in the table while the plugin is loaded, a host-lifetime object's (`local`,
+  empty params: `StoreSelf.contribute`; any other factory throws, R21) from `live` until it fails, ends or restarts,
+  entering before anyone sees it live and leaving at its seal. One value per registry each; a Chord watchable (a
+  source, a constant, a document handle, a reference member, a writable, a registry value) is followed through the
+  batch, anything else is a plain value whatever methods it has (registries carry natives); a registry value closing
+  a cycle of registries (through the tables and the factory's own earlier contributions) is refused `invalid/cycle`
+  at `contribute` (an edge lives as long as its contribution is in a table). Every served registry composes once at the end of `load`'s setups, before any object activates.
+  `self.registry(R)` is a declared dependency: with no value at activation (no provider, a first `compose` that threw,
+  a version not served here) the attempt fails `dependency_failed` (`transient`, the registry's error as the cause,
+  the references kept) at once, and the registry's first value retries it (R18); a version the provider does not
+  serve fails it `broken` (`contract_mismatch`: only a reload helps). `host.registry(R, ctx)` waits for `load` and
+  rejects without a value.
+- **Wake signals** (`self.retryOn(...sources)`, D2): registry values (constants are accepted and never wake; anything
+  else throws: a reference's member, the attempt's writable, `ref.state`). The object follows them from the factory's
+  return (before hydration, references and natives, so a failed open still has them) until the next attempt's
+  declaration replaces them or it ends. A new value retries a failed object (`transient` or `broken`) as `ref.retry()`
+  does, after the batch; one while it activates is remembered and retries it at once if that attempt fails; one while
+  live is ignored; failure calls wake nothing; a composition made by the object's own contributions leaving (it
+  failed live) does not wake it. There is no backoff between wakes: wake an object on sources that change rarely
+  (models, a harness), not on every event (a writable set per message retries a failing object per message).
+- `host.root(fn, ctx, { principal? })` (slice 8 D3): `fn(ctx)` with a handler's `Ctx<P>`: the host's principal or the
+  given one, this host's incarnation, `ctx`'s telemetry, a signal linked to `ctx`'s, `ctx.get`. When `fn` settles,
+  `ctx` aborts or the host closes, the scope is sealed: its references released (their calls reject `released`), a
+  waiting `ctx.get` gives up, a later one is refused `released/settled`, its signal aborted. An abort rejects
+  `host.root` at once (an uncooperative `fn` runs on and fails at its next use of Chord); an aborted `ctx` runs no
+  `fn`; `host.close` rejects it at once `released/closed`, as a method's caller when its object ends; after `close`
+  it rejects `released/closed`. Not counted in `host.activity`.
 - `host.load([{ name, facet }], ctx)`: once per host; runs every setup, then activates every type with empty params
   and resolves when each has had its first outcome, live or failed (the start barrier; later retries never hold it).
   A setup that throws rejects it with that error and closes the host as `close` does, its links included. Gets wait
@@ -281,7 +316,8 @@ server.accept(webSocketLink(ws), { principal, limits: { part: 16 * MiB, decoded:
   `broken`; a live object whose read fails so fails while live (`object_failed`), keeping its documents for the
   next attempt.
 - A factory `(params, self) => implementation` declares with `self.state`, `self.derive`, `self.get`, `self.open`,
-  `self.on`, `self.onLive` and `self.job` (`jobs/`), and writes with `self.tx`. It runs once per attempt. The implementation has exactly the contract's members: state
+  `self.on`, `self.onLive`, `self.job` (`jobs/`), `self.registry`, `self.writable` and `self.retryOn` (below), and
+  writes with `self.tx`. It runs once per attempt. The implementation has exactly the contract's members: state
   members are JSON watchables (document handles, derives, reference members, constants), methods `(args, ctx) =>
   Promise<result>`, or `(ctx) => Promise<result>` for a method without arguments (the reference omits them too:
   `notes.clear(ctx)`). A remote factory `(params, principal, self) => ({ variant, members })` gets the principal its
@@ -456,8 +492,9 @@ caller), `Placement` (where a reference or an arriving hold goes: here, a route'
 served here is placed here), `Route` (one per routed kind: per address its `Path`, at most one running
 `resolve`, the backoff per address; an address is kept while it has holders, a link or a running `resolve`),
 `ChordObject` (one per identity: its state across attempts, holders, retries, cycle checks with its instance id and
-the chain it was created for, lingering, ending and revocation, and the count of its running and finishing job runs,
-which keeps it like a reference: `countRuns`), `Activity` (`host.activity`: counters, one
+the chain it was created for, lingering, ending and revocation, the count of its running and finishing job runs,
+which keeps it like a reference: `countRuns`, its contributions while live and its wake signals), `RetryWakes` (an
+object's `retryOn` subscriptions), `RootScopes` (the open `host.root` scopes, sealed once each), `Activity` (`host.activity`: counters, one
 publication per microtask turn), `References` (one type's presence list), `RevocationKeys` (each principal's keys,
 in a `WeakMap`),
 `Attempt` (one activation: it is the
@@ -471,9 +508,9 @@ native: opened once, closed once, a late value closed at once; `within` bounds a
 windows per identity and when each ends, holding no object), `Binding` (a reference's link to its object or remote
 object: its state, the object that declared it, its per-reference watches, calls, parked calls and the waits for a
 state; released, it keeps only its name), `ParkedCalls` (a reference's queue of calls made while loading, a timer
-each), `ReferenceState` (`ref.state`: its native watches, told of each change), `CallContext` (a handler's
-`ctx`), `withLinkedAbortSignal` (a call's or a get's context aborted by the caller and by a long-lived signal, its
+each), `ReferenceState` (`ref.state`, a native source: its native watches, told of each change; derives over it
+marked), `CallContext` (a handler's or a root scope's `ctx`), `withLinkedAbortSignal` (a call's or a get's context aborted by the caller and by a long-lived signal, its
 reference's or its attempt's, linked only until it settles: `AbortSignal.any` keeps cleanup entries per call while its
-sources live before Node 24.16.0), `checkImplementation` (the variant and member check), `setUp` (runs one facet's setup) and
-`resolveWatchable` (the member check, Q14), and `nextDelay` (the 1 s to 60 s doubling every backoff shares). Cycle checks follow the waits of activating objects with a visited set,
+sources live before Node 24.16.0), `checkImplementation` (the variant and member check), `setUp` (runs one facet's setup),
+`resolveWatchable` (the member check, Q14), `contributionOf` (a contribution as Chord follows it, the cycle check), and `nextDelay` (the 1 s to 60 s doubling every backoff shares). Cycle checks follow the waits of activating objects with a visited set,
 linear in the waits.

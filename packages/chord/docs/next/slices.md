@@ -27,15 +27,16 @@ slice spec's section citations are for orientation, not a reading limit (owner, 
 
 - **L1** (`src/next/contracts`, `src/next/data`): contracts, params and identity, argument checks, principal keys,
   errors. `index.ts` for apps, `internal.ts` for Chord's own code.
-- **Slices 1, 2, 3a, 3b, 4a, 4b, 5, 6a, 6b** (committed; 5 `4a5b45c45`, 6a and 6b 2026-10-27/28): `src/next/documents`, `state`, `host`, `jobs`, `link`,
-  `remote`, `store`; examples 01-25; benchmarks in `benchmarks.md`.
+- **Slices 1, 2, 3a, 3b, 4a, 4b, 5, 6a, 6b, 8** (committed; 5 `4a5b45c45`, 6a and 6b 2026-10-27/28, 8 2026-10-28): `src/next/documents`, `state`, `host`, `jobs`, `link`,
+  `remote`, `store`, `registries`; examples 01-30 (Durable's 35-37); benchmarks in `benchmarks.md`.
 - **Chord's shared code** (upstream pi): `src/watch.ts` (`Watch`, `NativeWatch`, `WatchHandle`, `WatchEnd`,
   `NativeWatchable`), Delta (`track`, `diffRevisions`, `applyImmutable`, encoders, `PendingOps`, `appendText`),
   context, JSON, output, SQLite drivers.
 
 ## The slices
 
-Order (owner, 2026-10-22: routines and jobs before the store and reload).
+Order (owner, 2026-10-22: routines and jobs before the store and reload; 2026-10-27: slice 8 before slice 7, whose
+reload has to reload real registries).
 
 | # | Slice | In short |
 | --- | --- | --- |
@@ -48,8 +49,8 @@ Order (owner, 2026-10-22: routines and jobs before the store and reload).
 | 5 | **Routines and jobs** | `self.routines`, `self.job` |
 | 6a | **The store** | the store (backends, tables, queries, writes, commit queue, outbox, documents engine, migrations, export), persisted documents, `self.table`, keyed watches and retirement |
 | 6b | **Durable and jobs on the store** | persisted jobs, Durable's `StoreStorage`, the Chord source over Durable's views (`self.follow`) |
+| 8 | **Registries and `host.root`** | registries, `self.writable`, `retryOn`, Durable's `registryReader`, `host.root` (`chord(fn, context)` and the harness object are p3's base code) |
 | 7 | **Reload and rollout** | plugin loading, staging, swaps and restarts, revisions, `accepts` in use |
-| 8 | **Registries and `host.root`** | registries, `self.writable`, `retryOn`, a `RegistryReader` for Durable, `host.root` (`chord(fn, context)` and the harness object are p3's base code) |
 | 9 | **Telemetry** | spans, events, metrics across hosts |
 
 The playground (`apps/chord-playground`) moves to the new code once slice 4 exists. Round-3 cuts (C3-C16) and
@@ -211,14 +212,13 @@ deleted (the slice's spec and code are the record). Moved here from `carry-over.
   internal ones are rebuilt; add matching only if a real need appears. (W1.)
 - **Retrying broken failures:** reload retries a broken object as `ref.retry()` does (`ChordObject.retry`: the
   backoff skipped, an attempt now; holders are told `loading`). (Slices 2, 3b.)
-
-### Slice 8: registries and `host.root`
-
-- **Durable's views from other objects** (from slice 6b): the harness carried in a registry entry, so an object other
-  than the one that opened Durable can `self.follow` its views.
-
-- Specified in `slice-8.md` (decided 2026-10-27): `host.root` (D3), `retryOn` (D2), registries recomposing in the
-  owner's flush (W4); `host.activity` on the facet's host dropped (nothing needs it).
+- **Registries on reload** (from slice 8 §6): a reload replaces a plugin's contributions and a provider atomically, in
+  one batch (staging composes nothing, decision D1 of "Review round 1"); the record keeps the provider, facet
+  contributions by plugin and object contributions by object apart for it (`RegistryRecord.serve` refuses a second
+  serve today). Older registry readers across a reload of the provider (their mapped values follow the new
+  `accepts[old].value`). A `writable` across a pure swap: the new factory makes a new `self.writable(initial)`, so a
+  contribution goes back to its initial value until the restarted routine sets it (MCP's tools would vanish briefly).
+  `retryOn` watches across a reload (a reload retries failed objects anyway). (Slice 8 spec.)
 
 ### Slice 9: telemetry
 

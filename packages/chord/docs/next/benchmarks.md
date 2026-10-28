@@ -583,3 +583,53 @@ each; the head lookup and scans under it are at parity or faster in the micro-be
 memory, 55.5 µs persisted (two commits: the record and state created, then the reservation); a state change inside
 `run` 2.7 µs in memory, 21.3 µs persisted (one delta commit, as the gate's (c)), 3.2 µs deferred (stored with the
 outcome).
+
+## Slice 8: registries and `host.root` (2026-10-28)
+
+Node 24.4.1, one CPU (`taskset -c 6`), runs alternating. HEAD is `391e83fb1`, extracted at a path of the same length
+(`/home/badlogic/pi-h8`); the build was measured in the worktree and, where the worktree itself skewed a result (below),
+in an extract of the same sources at `/home/badlogic/pi-x8`.
+
+**Paths under every object** (`test/next/bench/calls.ts`, new: runs on HEAD as it is), median per operation over nine
+bursts, heap allocated per operation, three alternating runs each, HEAD → build:
+
+| Case | HEAD | build |
+| --- | --- | --- |
+| local method call (its ctx) | 2.80-2.81 µs, 6,894 B | 2.81-2.83 µs, 6,894 B |
+| commit through a watched derive (`batch.compute`) | 10.34-10.43 µs, 15,312 B | 10.46-10.51 µs, 15,310 B |
+| activation churn: get, live, release (an object with params) | 57.5-59.3 µs, 43,696-43,717 B | 58.1-58.9 µs, 43,782-43,787 B |
+| retained per live object (10,000 kept) | 6,586 B | 6,602 B |
+
+The attempt keeps its registry reads, contributions, wake signals and writables in one record made by the first such
+declaration, and iterates nothing when there is none: the first build allocated 1,020 B more per activation (six
+arrays per attempt, an array iterator per `for … of` over an empty list, a copy from `splice`) and retained 72 B more
+per live object; now +70 B allocated and +16 B retained (one field on the attempt, one on the object).
+
+**Existing benchmarks**, HEAD → build: the derive diamond (`derives.ts`, three runs) 9.4-9.8 → 9.5-9.9 µs median; its
+pooled p95 16.5-17.1 → 18.4-20.8 µs comes from the run in which V8 tiers the commit path up (per run, after it: HEAD
+10.7-11.3 µs, build 10.1-11.3 µs; the first measured runs 15.0-25.6 µs on either side, in another run each), the same
+with HEAD's `batch.ts` and `derive.ts` in the build. The store gate (`store.ts`, three runs): every median within
+0.4 µs (Chord store 13.0-13.9 → 13.0-14.2 µs, Chord host 17.3-18.2 → 17.3-17.8 µs, in-memory document 2.1 → 2.2 µs),
+heap 3,498 → 3,144 KiB. Jobs (`jobs.ts`): start 8.4 → 8.5 µs in memory, 55.4 → 56.2 µs persisted; state change 2.7 →
+2.7, 21.3 → 21.8, 3.4 → 3.5 µs. Links (`links.ts`, three runs): wire sizes, encodes, decodes and heap per message
+unchanged; its round trips are one cold burst each and vary as much between HEAD runs (commit to frame, text codec,
+0.055-0.076 ms). A warmed remote call (2,000 calls per burst, nine bursts, a memory link): binary 7.16-7.24 → 7.17-7.29
+µs, text 7.66-7.72 → 7.70-7.83 µs in the extracts; the worktree itself runs the same sources at 7.8-7.9 µs (binary),
+an effect of the tree, not the code.
+
+**Registries and writables** (`test/next/bench/registries.ts`, new), median over nine bursts: `writable.set` delivered
+to one watch 0.81-0.91 µs (2.9 KB allocated: the batch and the watch's call); a set of the same value 0.008 µs, 0 B
+(one comparison: its batch work is a method of its own, so `set` allocates no closure context); one of 10 contributions
+changed while the registry is watched 0.74-0.77 µs, of 100 1.52-1.59 µs (the table built again over every entry, one
+compose per set: the counted `chord.registry.composes` is 1.00 per set).
+
+**Fix round 1** (2026-10-28), HEAD extract → build extract (`/home/badlogic/pi-x8`), CPU 6. `calls.ts`, two runs: local
+method call 2.80 → 2.80-2.81 µs, 6,894 B both; commit through a watched derive 10.51-10.65 → 10.72 µs; activation churn
+57.9-59.0 → 59.3-60.0 µs, 43,714 → 43,769-43,787 B. The derive diamond (five runs): median 9.4-9.8 → 9.5 µs, pooled p95
+16.4-16.7 → 19.0-19.2 µs. Per run, both have one slow run while V8 tiers the commit path up (HEAD its second, median/p95
+15.5/22.6-22.9 µs; the build its first, 16.4/26.7-27.2 µs) and equal runs after it (HEAD 8.8-9.6/9.6-11.2 µs, build
+8.9-9.8/9.7-10.6 µs). `batch.compute` is not the cause: HEAD's `batch.ts` and `derive.ts` in the build give the same
+p95, and swapping host files moves it without a pattern (code layout, not work on the path). `registries.ts`:
+`writable.set` 0.87 µs, the same value 0.011-0.016 µs and 0 B (the seal check now comes first: a set of an ended
+attempt's writable throws whatever its value); one of 10 contributions set 0.71-0.78 µs, of 100 1.43-1.61 µs (one run
+in six 3.4 µs on either variant tried: JIT).

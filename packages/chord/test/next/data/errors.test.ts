@@ -25,7 +25,9 @@ describe("ChordError", () => {
 		const error = new ChordError({ code: "too_large", reason: "part", message: "m" }) as ChordError;
 		if (error.code === "invalid") expectTypeOf(error.reason).toEqualTypeOf<ChordErrorReason<"invalid">>();
 		if (error.code === "unavailable")
-			expectTypeOf(error.reason).toEqualTypeOf<"locked" | "park_timeout" | "busy" | "storage_failed" | undefined>();
+			expectTypeOf(error.reason).toEqualTypeOf<
+				"locked" | "park_timeout" | "busy" | "storage_failed" | "undeclared" | undefined
+			>();
 		if (error.code === "gone") expectTypeOf(error.reason).toEqualTypeOf<undefined>();
 		expect(error).toBeInstanceOf(Error);
 		expect(error.name).toBe("ChordError");
@@ -83,7 +85,7 @@ describe("protocol table", () => {
 				not_ready: [],
 				released: ["ended", "closed", "settled", "version", "discarded"],
 				too_large: ["part"],
-				unavailable: ["locked", "park_timeout", "busy", "storage_failed"],
+				unavailable: ["locked", "park_timeout", "busy", "storage_failed", "undeclared"],
 				aborted: [],
 			},
 		};

@@ -1101,8 +1101,9 @@ export type DocumentWatch<T extends JsonObject> = WatchHandle<Readonly<T>>;
  * may come before the attaching promise resolves; their ops apply from `Observation.value`. `advance` must only record
  * the call, synchronously and quickly, never await, call the Session, or throw. A throw is reported as
  * `listener_error`, detaches the observer, and ends it `listener_error` with the error. `end` is called once: `ended`
- * when the Session closes or the observed scope's owner ends (a task document's task, after its retirement change,
- * inside that commit's `adopt`), `failed` with the error that failed the Session; never after `detach()`.
+ * when the observed scope's owner ends (a task document's task, after its retirement change, inside that commit's
+ * `adopt`), `failed` with "session closed" when the Session closes (an adapter follows the next Session) or with the
+ * error that failed the Session; never after `detach()`.
  */
 export type Observer<T> = {
 	advance(call: WatchCall<T>, context: Context): void;
@@ -1111,7 +1112,7 @@ export type Observer<T> = {
 
 /**
  * A synchronous observer of stored commits (`Session.observeCommits()`): `advance` gets each `CommitPublication`, `end`
- * the Session's close.
+ * the Session's close (`failed` with "session closed", or with the error that failed the Session).
  */
 export type CommitObserver = {
 	advance(publication: CommitPublication, context: Context): void;

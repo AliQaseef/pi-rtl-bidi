@@ -8,7 +8,7 @@ import type { JsonValue } from "../../json.ts";
 import type { NativeWatchable, Watchable, WatchEnd } from "../../watch.ts";
 import type { Contract, Implementation, ParamsOf } from "../contracts/index.ts";
 import { contractData, type ShapeOf } from "../contracts/internal.ts";
-import { ChordError, type FailureCause, type Principal } from "../data/index.ts";
+import { ChordError, type FailureCause, isChordError, type Principal } from "../data/index.ts";
 import { asChordError, checkArgs, checkParams, invalid, openFailure } from "../data/internal.ts";
 import type { HandleOf, JsonObject, StateDefinition, Tx } from "../documents/index.ts";
 import {
@@ -21,7 +21,10 @@ import {
 } from "../documents/internal.ts";
 import type { JobDefinition, JobHandle, JobImplementation } from "../jobs/index.ts";
 import { type AnyJobImplementation, Job } from "../jobs/internal.ts";
-import { Derive, type DeriveSource } from "../state/internal.ts";
+import type { Contribution, Registry, RegistryValue } from "../registries/index.ts";
+import { type RegistryContribution, type RegistryEdge, RegistryValueSource } from "../registries/internal.ts";
+import type { Writable } from "../state/index.ts";
+import { Derive, type DeriveSource, WritableSource } from "../state/internal.ts";
 import type { Columns } from "../store/columns.ts";
 import { tableSqlName } from "../store/sql.ts";
 import type { ChordStore } from "../store/store.ts";
@@ -32,7 +35,7 @@ import { CallContext, type Caller, type Ctx, withLinkedAbortSignal } from "./ctx
 import { Deadline } from "./deadline.ts";
 import { type FollowAttach, FollowSource } from "./follow.ts";
 import type { HostError } from "./host.ts";
-import { attachDerives, checkImplementation, type KeyedBinding, type Members } from "./members.ts";
+import { attachDerives, checkImplementation, contributionOf, type KeyedBinding, type Members } from "./members.ts";
 import {
 	type CloseFailed,
 	drained,
@@ -44,6 +47,7 @@ import {
 } from "./native.ts";
 import type { ChordObject } from "./object.ts";
 import type { Binding, CheckedParams, Reference, Target } from "./reference.ts";
+import { type RetrySource, retrySource } from "./retry-on.ts";
 import {
 	type OnHandler,
 	type OnLiveHandler,
@@ -53,19 +57,48 @@ import {
 } from "./routines.ts";
 
 /**
- * What a factory declares with. Declarations (`state`, `derive`, `get`, `open`, `on`, `onLive`, `job`) are valid only
- * while it runs. `P` is the app's principal type, which the ctx of routine calls and job runs carry.
+ * What a factory declares with. Declarations (`state`, `derive`, `get`, `registry`, `writable`, `retryOn`, `open`,
+ * `on`, `onLive`, `job`) are valid only while it runs. `P` is the app's principal type, which the ctx of routine calls
+ * and job runs carry.
  */
 export interface Self<P extends Principal = Principal> extends RoutineDeclarations<P> {
 	/** This object's documents of `definition`, in memory for its life (across its attempts). */
 	state<D extends StateDefinition<JsonObject, boolean, false>>(definition: D): HandleOf<D>;
-	/** A value computed from `sources` by the pure, synchronous `compute`. */
-	derive<const S extends readonly Watchable<unknown>[], T extends JsonValue>(
+	/**
+	 * A value computed from `sources` (JSON watchables and native ones: a `writable`, a registry value, `ref.state`) by
+	 * the pure, synchronous `compute`; always JSON.
+	 */
+	derive<const S extends readonly (Watchable<unknown> | NativeWatchable<unknown>)[], T extends JsonValue>(
 		sources: S,
-		compute: (values: { readonly [I in keyof S]: S[I] extends Watchable<infer V> ? V : never }) => T,
+		compute: (
+			values: {
+				readonly [I in keyof S]: S[I] extends Watchable<infer V>
+					? V
+					: S[I] extends NativeWatchable<infer V>
+						? V
+						: never;
+			},
+		) => T,
 	): Watchable<T>;
 	/** A reference to another object, live once this object is, released when it ends. */
 	get<C extends Contract>(Type: C, params: ParamsOf<C>): Reference<C>;
+	/**
+	 * Registry `R`'s composed value as this plugin's version of `R` sees it: a declared dependency, as `get` is
+	 * (activation waits until it has a value; with none it fails `transient` and is retried when one arrives, R18).
+	 * Read `.value` at use; once live, a later failure of the registry keeps its last good value.
+	 */
+	registry<C, V>(R: Registry<C, V>): RegistryValue<V>;
+	/**
+	 * An in-process value this attempt sets (`set`, identity compared): a contribution, a derive source and an `on`
+	 * source, never a state member; its watches end with the attempt, and `set` after its end throws `released`.
+	 */
+	writable<T>(initial: T): Writable<T>;
+	/**
+	 * Wake signals: a new value of any of `sources` (registry values; constants never change) retries this object
+	 * while it is failed, as `ref.retry()` does, and once more at once if its current activation fails. Followed from
+	 * the factory's return until the next attempt's declaration or the object's end; failures wake nothing.
+	 */
+	retryOn(...sources: readonly (Watchable<unknown> | NativeWatchable<unknown>)[]): void;
 	/**
 	 * A native, opened during activation after the references are live and the earlier natives are open, and closed
 	 * in reverse when the attempt ends. `open` gets a context aborted when the attempt is abandoned; `close` one aborted
@@ -101,6 +134,12 @@ export interface StoreSelf<P extends Principal = Principal> extends Self<P> {
 	state<D extends StateDefinition<JsonObject, boolean, boolean>>(definition: D): HandleOf<D>;
 	/** This object's table `definition` in the host's store, once per table name. */
 	table<C extends Columns, K extends readonly string[]>(definition: TableDefinition<C, K>): Table<C, K>;
+	/**
+	 * Contributes `value` to registry `R` from the moment this object is live until it ends, fails or restarts (R21: a
+	 * host-lifetime object): a plain value, or a Chord watchable of one (followed: its change recomposes). At most one
+	 * per registry.
+	 */
+	contribute<C>(R: Registry<C, unknown>, value: Contribution<C>): void;
 }
 
 /**
@@ -110,6 +149,27 @@ export interface StoreSelf<P extends Principal = Principal> extends Self<P> {
 export type Factory<C extends Contract, P extends Principal = Principal> = ShapeOf<C>["kind"] extends "local"
 	? (params: ParamsOf<C>, self: keyof ParamsOf<C> extends never ? StoreSelf<P> : Self<P>) => Implementation<C, Ctx<P>>
 	: (params: ParamsOf<C>, principal: P, self: Self<P>) => Implementation<C, Ctx<P>>;
+
+/** How an activation fails on a declared registry without a value (`#readRegistries`). */
+type UnreadRegistry = Extract<Activation, { readonly kind: "failed" | "dependency_failed" }>;
+
+/** No declarations of a kind: the shared empty list. */
+const NONE: readonly never[] = [];
+
+/** An attempt's registry reads, contributions and wake signals, and its writables (slice 8). */
+type RegistryDeclarations = {
+	/** The registry values it declared (`self.registry`), registered as read during activation (`reads`). */
+	readonly registries: RegistryValueSource[];
+	/** Releases its registry reads (with its references). */
+	readonly reads: (() => void)[];
+	/** Its wake signals (`self.retryOn`), handed to its object right after the factory. */
+	readonly retrySources: RetrySource[];
+	/** Its writables, whose watches end with it. */
+	readonly writables: { detach(error: Error): void }[];
+	/** Its contributions as declared, resolved during activation into `contributions`. */
+	readonly declared: { readonly registry: Registry<unknown, unknown>; readonly value: unknown }[];
+	contributions: readonly RegistryContribution[];
+};
 
 /** How an attempt's activation ended. `dependency_failed` (R18) keeps the attempt's references. */
 type Activation =
@@ -174,6 +234,8 @@ export class Attempt implements StoreSelf, KeyDeclarer {
 	#abandoned: Exclude<Activation, { readonly kind: "live" }> | undefined;
 	/** A followed source's end while this attempt activated: it fails as it goes live (if its activation returned). */
 	#endedEarly: ChordError | undefined;
+	/** Its registry reads, contributions, wake signals and writables, made by the first: most attempts have none. */
+	#registryDeclarations: RegistryDeclarations | undefined;
 
 	constructor(object: ChordObject, previous: Attempt | undefined, context: Context) {
 		this.#object = object;
@@ -221,13 +283,21 @@ export class Attempt implements StoreSelf, KeyDeclarer {
 		return handle as unknown as Table<C, K>;
 	}
 
-	derive<const S extends readonly Watchable<unknown>[], T extends JsonValue>(
+	derive<const S extends readonly (Watchable<unknown> | NativeWatchable<unknown>)[], T extends JsonValue>(
 		sources: S,
-		compute: (values: { readonly [I in keyof S]: S[I] extends Watchable<infer V> ? V : never }) => T,
+		compute: (
+			values: {
+				readonly [I in keyof S]: S[I] extends Watchable<infer V>
+					? V
+					: S[I] extends NativeWatchable<infer V>
+						? V
+						: never;
+			},
+		) => T,
 	): Watchable<T> {
 		this.#assertDeclaring("derive");
 		// The values are the sources' values, in order; the result is `T`.
-		const derive = new Derive(sources, compute as (values: readonly JsonValue[]) => T, this.#object.host.batch);
+		const derive = new Derive(sources, compute as (values: readonly unknown[]) => T, this.#object.host.batch);
 		this.#derives.push(derive);
 		return derive as unknown as Watchable<T>;
 	}
@@ -240,6 +310,50 @@ export class Attempt implements StoreSelf, KeyDeclarer {
 		this.#references.push({ binding, contract: Type, params: checked });
 		// The binding was built from `Type`'s members.
 		return binding.reference as Reference<C>;
+	}
+
+	registry<C, V>(R: Registry<C, V>): RegistryValue<V> {
+		this.#assertDeclaring("registry");
+		const value = this.#object.host.registryRecord(R.name).value(R.version);
+		this.#declarations().registries.push(value);
+		// Its values are the composition as `R`'s version has it, `V`.
+		return value as RegistryValue<V>;
+	}
+
+	writable<T>(initial: T): Writable<T> {
+		this.#assertDeclaring("writable");
+		const owner = {
+			context: this.#context,
+			assertUsable: () => {
+				if (this.#token.sealed) throw this.#object.ended();
+			},
+		};
+		const writable = new WritableSource(initial, owner, this.#object.host.batch);
+		this.#declarations().writables.push(writable);
+		return writable;
+	}
+
+	retryOn(...sources: readonly (Watchable<unknown> | NativeWatchable<unknown>)[]): void {
+		this.#assertDeclaring("retryOn");
+		const { retrySources } = this.#declarations();
+		for (const source of sources) retrySources.push(retrySource(source, this.#object.label));
+	}
+
+	contribute<C>(R: Registry<C, unknown>, value: Contribution<C>): void {
+		this.#assertDeclaring("contribute");
+		const { served, label, host } = this.#object;
+		// R21: the types allow it only to host-lifetime objects; plugin code is bundled without type checks.
+		if (served.kind !== "local" || !served.hostLifetime) {
+			throw new Error(`${label}: self.contribute is valid only in a local type with empty params`);
+		}
+		const { declared } = this.#declarations();
+		if (declared.some(({ registry }) => registry.name === R.name)) {
+			throw new Error(`${label}: registry ${R.name} is contributed to twice`);
+		}
+		// Refused at `contribute` (declaration policy), also a cycle within this factory's own declarations; the edges
+		// live with the contributions in the tables, from live on.
+		if (value instanceof RegistryValueSource) host.registryRecord(R.name).assertNoCycle(value, this.#pendingEdges());
+		declared.push({ registry: R as Registry<unknown, unknown>, value });
 	}
 
 	open<T>(
@@ -384,6 +498,11 @@ export class Attempt implements StoreSelf, KeyDeclarer {
 		});
 	}
 
+	/** Its contributions, resolved by its activation: in the registries' tables while its object is live. */
+	get contributions(): readonly RegistryContribution[] {
+		return this.#registryDeclarations?.contributions ?? NONE;
+	}
+
 	/** The variant a remote object's factory chose; `undefined` for a local object. */
 	get variant(): string | undefined {
 		return this.#variant;
@@ -494,27 +613,34 @@ export class Attempt implements StoreSelf, KeyDeclarer {
 	}
 
 	/**
-	 * Detaches its derives (once their object no longer needs them: reads throw `released`, their watches end) and its
-	 * followed sources (their observers detached, their watches ended).
+	 * Detaches its derives (once their object no longer needs them: reads throw `released`, their watches end), its
+	 * followed sources (their observers detached, their watches ended) and its writables (their watches ended).
 	 */
 	detach(): void {
 		const ended = this.#object.ended();
 		for (const derive of this.#derives) derive.detach(ended);
 		for (const follow of this.#follows) follow.detach();
+		const declarations = this.#registryDeclarations;
+		if (declarations !== undefined) for (const writable of declarations.writables) writable.detach(ended);
 	}
 
-	/** Releases its references, and the previous attempt's if this one never bound its own. */
+	/** Releases its references and registry reads, and the previous attempt's if this one never bound its own. */
 	releaseReferences(): void {
 		this.#releasePrevious();
 		for (const { binding } of this.#references) binding.release();
+		const declarations = this.#registryDeclarations;
+		if (declarations !== undefined) for (const release of declarations.reads.splice(0)) release();
 	}
 
 	/** The activation steps; each catches its own failures with their kind (the table in slice 2's spec). */
 	async #activate(deadline: Deadline): Promise<Activation> {
 		let implementation: unknown;
 		let dependencies: Target[];
+		let unread: UnreadRegistry | undefined;
 		try {
 			implementation = this.#declare();
+			// Right after the factory, before anything can fail: a failed attempt keeps its wake signals.
+			this.#object.retryOn(this.#registryDeclarations?.retrySources ?? NONE);
 			const { documents } = this.#object;
 			// The object holds the pins from now on.
 			documents.hydrate(this.#declared, this.#pins.splice(0), this.#opening);
@@ -528,12 +654,15 @@ export class Attempt implements StoreSelf, KeyDeclarer {
 				host.bind(binding, contract, params, this.#opening),
 			);
 			for (const dependency of dependencies) this.#object.assertNoCycle(dependency, this.#opening);
+			if (this.#registryDeclarations !== undefined) unread = this.#readRegistries(this.#registryDeclarations);
 		} catch (error) {
 			return this.#broken(error);
 		} finally {
 			// Bound first: a dependency held only by the previous attempt never ends in between.
 			this.#releasePrevious();
 		}
+		// No value after `load`'s setups: none comes before a first composition (which retries it, R18) or a reload.
+		if (unread !== undefined) return this.#abandoned ?? unread;
 		try {
 			await Promise.all(dependencies.map((dependency) => this.#object.waitFor(dependency, this.#opening)));
 		} catch (error) {
@@ -586,6 +715,8 @@ export class Attempt implements StoreSelf, KeyDeclarer {
 			const checked = checkImplementation(this.#object.served.contract, implementation);
 			this.#members = checked.members;
 			this.#variant = checked.variant;
+			if (this.#registryDeclarations !== undefined)
+				this.#registryDeclarations.contributions = this.#resolveContributions(this.#registryDeclarations);
 			const { host, label } = this.#object;
 			attachDerives(this.#derives, this.#members.state, (member) => (error) => {
 				// During activation a throwing derive fails the attempt, which `activation_failed` reports alone.
@@ -605,6 +736,41 @@ export class Attempt implements StoreSelf, KeyDeclarer {
 			return this.#abandoned ?? { kind: "dependency_failed", cause };
 		}
 		return this.#abandoned ?? { kind: "live" };
+	}
+
+	/**
+	 * Registers this attempt's object as a reader of every registry it declared (woken by a first value, R18, until its
+	 * references are released); returns how the activation fails on the first with no value, `undefined` when every
+	 * one has a value. A version the provider does not serve (S2) is final until a reload: broken, the
+	 * `contract_mismatch` itself the cause. Otherwise (no provider, a first `compose` that threw) a value may still come:
+	 * `transient` (R18, the references kept), naming the registry, its error as the cause.
+	 */
+	#readRegistries({ registries, reads }: RegistryDeclarations): UnreadRegistry | undefined {
+		let unread: UnreadRegistry | undefined;
+		for (const value of registries) {
+			reads.push(value.read(this.#object));
+			const start = value.start();
+			if (unread !== undefined || start.kind === "value" || start.last !== undefined) continue;
+			const { error } = start;
+			if (isChordError(error, "contract_mismatch")) {
+				unread = { kind: "failed", cause: { kind: "broken", error } };
+				continue;
+			}
+			const message = `${this.#object.label}: registry ${value.name} has no value`;
+			const cause = new ChordError({ code: "unavailable", message }, { cause: error });
+			unread = { kind: "dependency_failed", cause: { kind: "transient", error: cause } };
+		}
+		return unread;
+	}
+
+	/** Its declared contributions, as Chord follows them (its references are live now), by its plugin and type. */
+	#resolveContributions({ declared }: RegistryDeclarations): readonly RegistryContribution[] {
+		const { served, host } = this.#object;
+		const contributor = { plugin: served.plugin, type: served.contract.name };
+		const pending = this.#pendingEdges();
+		return declared.map(({ registry, value }) =>
+			contributionOf(host.registryRecord(registry.name), contributor, registry.version, value, pending),
+		);
 	}
 
 	/**
@@ -684,6 +850,29 @@ export class Attempt implements StoreSelf, KeyDeclarer {
 	#releasePrevious(): void {
 		this.#previous?.releaseReferences();
 		this.#previous = undefined;
+	}
+
+	/** The registry edges its declared contributions would add (another registry's value contributed). */
+	#pendingEdges(): RegistryEdge[] {
+		const edges: RegistryEdge[] = [];
+		const { host } = this.#object;
+		for (const { registry, value } of this.#registryDeclarations?.declared ?? NONE) {
+			const to = value instanceof RegistryValueSource ? value.record : undefined;
+			if (to !== undefined) edges.push({ from: host.registryRecord(registry.name), to });
+		}
+		return edges;
+	}
+
+	#declarations(): RegistryDeclarations {
+		this.#registryDeclarations ??= {
+			registries: [],
+			reads: [],
+			retrySources: [],
+			writables: [],
+			declared: [],
+			contributions: NONE,
+		};
+		return this.#registryDeclarations;
 	}
 
 	#assertDeclaring(declaration: string): void {

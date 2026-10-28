@@ -2,7 +2,8 @@
 // and job runs, its member sources, slice 6a §1.2), its holders, retries after failures (backoff, dependency recovery
 // R18, `ref.retry()`), a live object's failure (slice 6a §1.4), the waits and cycle checks of activations (Q5, its
 // instance id and the activation chain it was created for), lingering after its last reference (§3, D8), the job runs
-// that keep it alive (§15), and its ending, revocation included (§4, R11).
+// that keep it alive (§15), its contributions to registries while live and its wake signals (`retryOn`, slice 8), and
+// its ending, revocation included (§4, R11).
 
 import { awaitWithContext, type Context } from "../../context/index.ts";
 import type { Contract, ParamsOf } from "../contracts/index.ts";
@@ -23,6 +24,7 @@ import type { KeyedBinding } from "./members.ts";
 import type { CloseFailed, NativeCloseReason } from "./native.ts";
 import { type Ended, type Failed, LIVE, LOADING, type RefState } from "./ref-state.ts";
 import type { Target } from "./reference.ts";
+import { type RetrySource, RetryWakes } from "./retry-on.ts";
 import { uuidv7 } from "./uuid.ts";
 
 /** A `local` contract, as a served type has it. */
@@ -48,6 +50,8 @@ export type Served =
 	  });
 
 type ServedType<C extends Contract> = {
+	/** The plugin whose facet served it: its objects contribute to registries by it. */
+	readonly plugin: string;
 	readonly contract: C;
 	readonly provider: Provider<Contract>;
 	/** How long a live object stays live after its last reference, in milliseconds (`serve`'s `linger`, 0 by default). */
@@ -146,6 +150,8 @@ export class ChordObject implements Target {
 	readonly #keys: KeyedMembers;
 	/** The one timer storing its jobs' held state changes by their earliest deadline (D8), while one is held. */
 	#flush: { readonly deadline: number; readonly timer: ReturnType<typeof setTimeout> } | undefined;
+	/** Its wake signals (`retryOn`), the last attempt's declaration; made by the first. */
+	#wakes: RetryWakes | undefined;
 
 	constructor(
 		host: AnyHost,
@@ -262,6 +268,17 @@ export class ChordObject implements Target {
 		if (this.#state.kind !== "waiting" && this.#state.kind !== "failed") return;
 		this.host.backoff.skip(this.identity);
 		this.attempt();
+	}
+
+	/**
+	 * Follows `sources` as its wake signals instead of the last attempt's (`self.retryOn`, right after a factory
+	 * returned): a new value retries it while failed, as `ref.retry()` does; one while it activates retries it at once
+	 * if that attempt fails; one while live does nothing.
+	 */
+	retryOn(sources: readonly RetrySource[]): void {
+		if (this.#wakes === undefined && sources.length === 0) return;
+		this.#wakes ??= new RetryWakes();
+		this.#wakes.replace(sources, () => this.#wake());
 	}
 
 	/** Calls a method of the live object for `caller`. */
@@ -383,6 +400,7 @@ export class ChordObject implements Target {
 		this.#lastFailure = error;
 		this.#outcome = settlement();
 		this.#outcome.reject(error);
+		this.#withdraw(attempt);
 		attempt.seal(error);
 		// Members following another object's sources freeze now: no commit of this object changes them.
 		this.#freeze(attempt, "foreign");
@@ -530,10 +548,18 @@ export class ChordObject implements Target {
 
 	#wentLive(attempt: Attempt): void {
 		this.#woken = undefined;
+		if (this.#wakes !== undefined) this.#wakes.during = undefined;
 		this.#state = { kind: "live", attempt };
 		this.#exposed = attempt;
 		if (this.#members.size > 0 || !this.#keys.empty)
 			this.host.batch.within(() => this.#rebind(attempt), this.#context);
+		const { contributions } = attempt;
+		// In the registries' tables before anyone sees it live (a getter released now reads them recomposed).
+		if (contributions.length > 0) {
+			this.host.batch.within(() => {
+				for (const contribution of contributions) contribution.record.add(contribution);
+			}, this.#context);
+		}
 		this.#lastFailure = undefined;
 		this.host.wentLive(this);
 		this.#outcome.resolve();
@@ -551,6 +577,8 @@ export class ChordObject implements Target {
 	#failed(attempt: Attempt, cause: FailureCause, holding: Attempt | undefined): void {
 		const woken = this.#woken === attempt;
 		this.#woken = undefined;
+		const wokenBy = this.#wakes?.during === attempt;
+		if (this.#wakes !== undefined) this.#wakes.during = undefined;
 		// What its activation loaded for the pinned keys goes; they stay frozen.
 		this.#keys.discard();
 		if (cause.kind === "transient") this.host.backoff.failed(this.identity);
@@ -573,6 +601,44 @@ export class ChordObject implements Target {
 		this.#idle();
 		// A dependency went live while this attempt activated: the wake it missed retries it now (R18).
 		if (holding !== undefined && woken) this.dependencyLive();
+		// A wake signal arrived while it activated: it retries it now.
+		else if (wokenBy) this.retry();
+	}
+
+	/**
+	 * A wake signal's new value (inside its batch): retries a failed object (after the batch: a factory may not run in
+	 * one), remembered while it activates, ignored while live and when its own contributions' leaving made it.
+	 */
+	#wake(): void {
+		const state = this.#state;
+		// Called by its wakes only.
+		const wakes = this.#wakes!;
+		if (state.kind === "activating") {
+			wakes.during = state.attempt;
+			return;
+		}
+		if (state.kind !== "failed" || wakes.leaving) return;
+		queueMicrotask(() => this.retry());
+	}
+
+	/**
+	 * The live attempt `attempt` leaves the registries' tables (it fails or ends), inside a batch; a composition this
+	 * leaving makes wakes no wake signal of this object.
+	 */
+	#withdraw(attempt: Attempt): void {
+		const { contributions } = attempt;
+		if (contributions.length === 0) return;
+		const { batch } = this.host;
+		const wakes = this.#wakes;
+		batch.within(() => {
+			if (wakes !== undefined) {
+				wakes.leaving = true;
+				batch.flushing(() => {
+					wakes.leaving = false;
+				});
+			}
+			for (const contribution of contributions) contribution.record.remove(contribution);
+		}, this.#context);
 	}
 
 	/** The member source of `member`, made bound to `exposed`'s member by its first use. */
@@ -637,6 +703,7 @@ export class ChordObject implements Target {
 		this.#flush = undefined;
 		this.documents.seal();
 		this.#stopLingering();
+		this.#wakes?.stop();
 		this.host.forget(this);
 		this.#outcome.reject(error);
 		// In a batch: the derives over its members are marked, so none keeps a cached value.
@@ -656,6 +723,7 @@ export class ChordObject implements Target {
 			const { holding } = state;
 			return holding === undefined ? { kind: "end", previous } : { kind: "release", attempt: holding, previous };
 		}
+		if (state.kind === "live") this.#withdraw(state.attempt);
 		state.attempt.seal(error);
 		return { kind: "close", attempt: state.attempt, previous };
 	}
