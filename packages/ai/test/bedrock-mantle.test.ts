@@ -61,9 +61,46 @@ describe("Bedrock Mantle", () => {
 		});
 	});
 
-	it("explains that Mantle models need a Bedrock API key", async () => {
-		const result = await streamSimple(mantleModels()[0], context, { env: {} }).result();
+	it("signs requests with SigV4 for bedrock-mantle when no Bedrock API key is set", async () => {
+		const model = mantleModels()[0];
+		const requests: { url: string; headers: Headers; body: string }[] = [];
+		const result = await streamSimple(model, context, {
+			env: {
+				AWS_REGION: "eu-west-1",
+				AWS_ACCESS_KEY_ID: "AKIDEXAMPLE",
+				AWS_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+				AWS_SESSION_TOKEN: "session-token",
+			},
+			fetch: async (input, init) => {
+				requests.push({ url: String(input), headers: new Headers(init?.headers), body: String(init?.body) });
+				return new Response(JSON.stringify({ error: { message: "captured" } }), { status: 400 });
+			},
+		}).result();
+
 		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toContain("AWS_BEARER_TOKEN_BEDROCK");
+		const request = requests[0];
+		expect(request.url).toBe(`${model.baseUrl.replace("{region}", "eu-west-1")}/responses`);
+		expect(request.headers.get("authorization")).toMatch(
+			/^AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE\/\d{8}\/eu-west-1\/bedrock-mantle\/aws4_request, SignedHeaders=[^,]*content-type[^,]*host[^,]*, Signature=[0-9a-f]{64}$/,
+		);
+		expect(request.headers.get("x-amz-security-token")).toBe("session-token");
+		expect(request.headers.get("x-amz-content-sha256") ?? request.headers.get("x-amz-date")).toBeTruthy();
+		expect(JSON.parse(request.body)).toMatchObject({ model: model.id });
+	});
+
+	it("prefers a Bedrock API key over AWS credentials", async () => {
+		let authorization: string | null = null;
+		await streamSimple(mantleModels()[0], context, {
+			env: {
+				AWS_BEARER_TOKEN_BEDROCK: "env-key",
+				AWS_ACCESS_KEY_ID: "AKIDEXAMPLE",
+				AWS_SECRET_ACCESS_KEY: "secret",
+			},
+			fetch: async (_input, init) => {
+				authorization = new Headers(init?.headers).get("authorization");
+				return new Response("{}", { status: 400 });
+			},
+		}).result();
+		expect(authorization).toBe("Bearer env-key");
 	});
 });
