@@ -1711,6 +1711,18 @@ validation and copies the v2 kernel added around Delta.
   `"<object type>"`; a store belongs to one host (rule 7), so the host kind told nothing, and `StoreStorage` and stores
   used before or without a host get the same names. W7's rule stays: no host instance in a name. Changed in 6a's code
   in 6b; the applier checks two parts.
+- **Slice 6b: owner names and claims, no `pi.durable` (owner, 2026-10-27: "seems reasonable"; supersedes D2's and D5's
+  `pi.durable` type name and D5's "one `StoreStorage` per store" rule):** every table and document in the store belongs
+  to an owner name, claimed once per store. A `local` object with empty params (P3) claims its type when it first
+  declares persisted data (`self.table`, persisted `self.state`, persisted `self.job`); `StoreStorage.open(store, owner,
+  ctx)` claims `owner`; a second claim of a name is refused (`invalid/args`): a second harness, or a plugin type that
+  meets the harness's name. `StoreStorage` declares its own tables (`entries`, `tasks`, …) through the store, the path
+  `self.table` takes, named `"<owner>:<table>"`, and writes its documents under `owner` in the engine's namespace
+  `durable`. In p3 the harness object passes its own type (`StoreStorage.open(store, Harness.name, ctx)`; base code gives
+  the store to the core facet); Durable's conformance suite passes a test name. The owner name plays the role of
+  `SqliteStorage`'s `prefix`, checked by the store. Objects never see the store: their API writes to the host's store
+  under their type; a host without a store fails an object declaring persisted data (`broken`, 6a). Rejected: an owner
+  handle (`self.storage`), an indirection that only added protection against trusted code.
 - **The performance and memory bar, and converging reviews (owner, 2026-10-27: "yes"):** supersedes "as good as
   HEAD in everything" for Chord v2 slices and pi changes. CPU: each hot path (calls, changes, watches, links) within
   about 5% of HEAD, measured in bursts with alternating processes pinned to one CPU; worse is fixed or goes to the

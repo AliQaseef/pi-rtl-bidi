@@ -26,7 +26,7 @@ const worker = createHost<P>({ address: Session({ id }), principal, store, onErr
 // the core facet: the harness object opens Durable on the same store
 host.serve(Harness, (_, self) => {
   const harness = self.open(async (context) =>
-    Harness.open(new StoreStorage(store), { models, registry, … }, context),   // one StoreStorage per store
+    Harness.open(await StoreStorage.open(store, Harness.name, context), { models, registry, … }, context),
     (h, _reason, context) => h.close(context));
   const view = self.follow((observer, ctx) => harness.value.observeConversation(id, observer, ctx));   // section 2
   return { … };
@@ -57,9 +57,9 @@ Chord imports nothing of Durable (S13); Durable's conformance suite runs in Dura
 Durable's four record tables (conversations, entries, tasks, submissions) and its ID namespace.
 
 **Layout (D2, owner, 2026-10-27: "the whole purpose of this slice"):** declared tables of the store, written as
-ordinary `put` writes: `defineTable`s that `StoreStorage` declares for itself under the type name `pi.durable` (SQL names
-`"pi.durable:<table>"`, e.g. `"pi.durable:entries"` (R2: no host kind in store names); type names are unique per app, so no plugin
-table can meet them), each row the record's indexed columns (`id`, `conversation_id`, `kind`, `status`, …) plus
+ordinary `put` writes: `defineTable`s that `StoreStorage` declares for itself under its owner name (`StoreStorage.open(store, owner, ctx)`,
+the name claimed once per store; SQL names `"<owner>:<table>"`, e.g. `"p3.harness:entries"`; decision "owner names
+and claims"), each row the record's indexed columns (`id`, `conversation_id`, `kind`, `status`, …) plus
 the whole record in a `json(...)` column. The outbox, export, import and the applier handle them as every table;
 Durable's layout changes later through `evolveTable`. The partial head index becomes an index on `(conversation_id,
 has_head, id)` (index columns are non-`opt`); indexed strings that must stay lossless (`kind`, `requestId`, document
