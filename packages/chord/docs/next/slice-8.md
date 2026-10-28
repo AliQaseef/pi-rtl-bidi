@@ -99,7 +99,8 @@ await host.root(async (ctx) => (await ctx.get(Notes, { session })).add(note, ctx
   out (reported `contribution_failed`); a `value` adapter that throws fails only that version's value, by the rules of a
   throwing `compose` (its readers keep the last good mapped value; before any, a reader of that version waiting at
   activation fails `transient`, retried when a mapped value arrives); current readers are never affected.
-- **Helpers:** `keyed(table, entriesOf)` (a map, a duplicate key reported, the first by plugin name wins) and
+- **Helpers:** `keyed(table, entriesOf, report)` (a map, a duplicate key reported through `report`, the first by plugin
+  name wins) and
   `ordered(table, itemsOf, orderOf?)`.
 - **Use sites guard contributions** (Q8): Chord's helpers keep each entry's plugin name; the guide shows catching a
   contribution's throws and rejections, reporting the plugin, and continuing.
@@ -121,7 +122,7 @@ In any object's factory, anywhere: Chord follows each source with watches owned 
 replaced by each attempt's declaration, stopped at the object's end; GC-tested), installed right after the factory
 returns, before natives open, so a failed open still has them; a `value` call of a source while the object is failed
 (`transient` or `broken`) retries it as `ref.retry()` does (backoff skipped, an attempt now, holders told `loading`);
-a call while it activates is remembered and retries it at once if that attempt fails (S1); ignored while live. Sources
+a call while it activates is remembered and retries it at once if that attempt fails (decision S1); ignored while live. Sources
 are those that live independently of the attempt: a `RegistryValue`, `constant`; anything else (a reference's member,
 a `writable` of the same attempt) is refused at runtime (declaration policy; TypeScript cannot tell them apart).
 
@@ -168,7 +169,9 @@ after `host.close` rejects `released`. No span of its own until slice 9.
 - Examples: Chord's `29-registries.ts` (a router registry with two contributing plugins, a conflict reported, a
   `writable` contribution, a missing provider healing) and `30-host-root.ts`; Durable's `test/examples/37-harness-
   registry.ts` (a Durable harness on the store, its extensions from a registry, its views followed by a second object)
-  and the `registryReader` tests in Durable's tree.
+  and the `registryReader` tests in Durable's tree. Durable's `subscribe` listeners then run inside Chord's flush:
+  they only wake Durable's scheduler (no Chord call; a reentrant one would throw `invalid/reentrant`), which the
+  `registryReader` test pins.
 
 ## 6. Carry-over
 

@@ -1938,11 +1938,14 @@ loop. Chord has no stream type (it would need its own rules for drops, cancellat
   access and execution environments from registry entries, looked up at each use:
 
   ```ts
-  const harness = self.open(async (context) => Harness.open(new StoreStorage(store), {   // the host's store (slice 6b)
-    models: () => host.registry(HarnessModels).value,
-    env: (target) => host.registry(HarnessEnvironments).value(target.cwd),
+  const models = self.registry(HarnessModels);              // declared dependencies (slice 8 S3): activation waits
+  const envs = self.registry(HarnessEnvironments);
+  const extensions = self.registry(HarnessExtensions);
+  const harness = self.open(async (context) => Harness.open(await StoreStorage.open(store, Harness.name, context), {
+    models: () => models.value,                              // read at use
+    env: (target) => envs.value(target.cwd),
     settings: () => currentSettings(),
-    registry: durableRegistry(host.registry(HarnessExtensions)),   // a RegistryReader over the composed NativeWatchable
+    registry: registryReader(extensions, context),           // Durable's RegistryReader over the composed value (slice 8)
   }, context), (h, _reason, context) => h.close(context));
   ```
 
