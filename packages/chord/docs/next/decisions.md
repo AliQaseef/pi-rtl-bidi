@@ -1747,6 +1747,12 @@ validation and copies the v2 kernel added around Delta.
   a throwing `compose` (the owner's bug) is reported (`registry_failed`), its watches get a `failed` call, and `.value`
   keeps the last good composition (before any, it throws). Derives keep `.value` throwing while failed: state must match
   its sources, an extension point must stay available.
+- **Slice 8 D2 and D3 (owner, 2026-10-27: "yes"):** D2: a `retryOn` source retries a failed object only on a `value`
+  call; a `failed` call does nothing. D3: `host.root<T>(fn, context, { principal? })` gives `fn` a handler's call
+  context (the host's principal or the given one, this host's incarnation, `context`'s telemetry and signal linked
+  until `fn` settles, `ctx.get`); at settle or abort the context is sealed (`ctx.get` rejects `released`, its references
+  released, their calls reject), so an uncooperative `fn` fails at its next use of Chord; before `load` its gets park;
+  after `host.close` it rejects `released`. `chord(fn, context)` is p3's helper. Closes design §26 #25.
 - **The performance and memory bar, and converging reviews (owner, 2026-10-27: "yes"):** supersedes "as good as
   HEAD in everything" for Chord v2 slices and pi changes. CPU: each hot path (calls, changes, watches, links) within
   about 5% of HEAD, measured in bursts with alternating processes pinned to one CPU; worse is fixed or goes to the

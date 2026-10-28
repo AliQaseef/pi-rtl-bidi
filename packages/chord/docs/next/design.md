@@ -1494,13 +1494,13 @@ export default defineFacet((host, self) => {         // `self` (contributions) a
 ## 17. Registries
 
 ```ts
-export const Http = defineRegistry<HttpContribution, Router>("chord.http", {
-  version: 2,
+export const Http = defineRegistry<HttpContribution, Router>("chord.http", { version: 2 });   // shared: identity only
+host.serve(Http, {                                             // the defining plugin's facet: the one provider (slice 8 D1)
+  compose: (table, { report }) => buildRouter(table, report),  // pure; always delivers a value; reports conflicts
   accepts: { 1: (old: HttpContributionV1): HttpContribution => upgrade(old) },
-  compose: (table, { report }) => buildRouter(table, report),   // pure; always delivers a value; reports conflicts
 });
 self.contribute(Http, { routes: { … }, wraps: [ … ] });
-const router = host.registry(Http).value;     // live
+const router = self.registry(Http).value;     // live (host.registry(Http) outside objects)
 ```
 
 - Each contributor (a facet or an object) contributes **at most one value per registry**; the table is an immutable,
@@ -2019,7 +2019,6 @@ this document):
 | 14 | project plugins | 21 | own pass over `plugin-loading.md` |
 | 16 | a Durable Object profile | 24 | when a DO target becomes concrete |
 | 24 | the rollout install timeout (60 s) and a per-type drain override: host options or fixed (the routine handover uses `closeTimeout`; a failing job `finish` backs off 1-60 s and blocks after five failures, decided) | 3 | with slice 7 |
-| 25 | `host.root` signature (`root(fn, context, { principal? })` proposed) and what an aborted, uncooperative `fn` means for its references (match the handler and `CallContext` rules) | 3, 24 | slice 8 |
 | 26 | how a migration commit reaches consumers (`[["r", value]]` per changed member, or a fresh `bound`; adapted by `accepts` for older consumers) | 21, 22 | slice 7 |
 | 28 | Astra's circuit breaker (a hard transport-buffer cap plus a stall deadline); the heartbeat is built, the cap was never decided | 3 | if a real case needs it |
 | 29 | round-3 cut C11 (`ctx.trace`); C3 and C4 are decided (§14, §15) | 8 | slice 9 |

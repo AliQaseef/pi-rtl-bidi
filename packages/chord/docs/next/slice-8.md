@@ -1,6 +1,6 @@
 # Slice 8: registries and `host.root` (spec)
 
-Status: **draft, open points marked "Decision needed"** (2026-10-27), written by the redesign session. Built in
+Status: **decided, ready for the spec reviews** (2026-10-27; D1-D3 and the registry failures decided by the owner), written by the redesign session. Built in
 parallel with 6b (mostly new files). The single source for building 8, together with `design.md` (§7, §8, §11, §16,
 §17, §18, §24 read in full), the decision log `decisions.md` (R21, R23, R25, Q8, D1 of "Review round 1", "Registries
 work like Durable's", "Changing contributions, `self.writable`", W4, "Failures are watch calls", "Slice 8 is
@@ -96,19 +96,20 @@ has them; a call of any source while the object is failed (`transient` or `broke
 independently of the attempt: a registry's composed value, another object's `writable` reached through a registry,
 `constant`; a reference's member is a type error (it would fail with the dependency, R18 handles that).
 
-> **Decision needed (D2): which calls retry.** A registry value's `failed` call (compose threw) is no reason to retry
-> the dependent. Proposal: only `value` calls retry; `failed` calls are ignored.
+**Which calls retry (D2, owner, 2026-10-27):** only `value` calls: a new value of a source wakes a failed object; a
+`failed` call (a throwing `compose`) does nothing, its next good composition retries.
 
 ## 4. `host.root(fn, context, options?)`
 
-> **Decision needed (D3): the signature and its guarantees** (design §26 #25). Proposal: `host.root<T>(fn: (ctx: Ctx)
-> => Promise<T>, context: Context, options?: { principal?: P }): Promise<T>`: `fn` gets a call context like a
-> handler's: the host's principal (or `options.principal`, a trusted same-host caller's choice, as base code acting for
-> an authenticated user), this host's incarnation, `context`'s telemetry and abort signal linked until `fn` settles
-> (`withLinkedAbortSignal`), and `ctx.get`. When `fn` settles, every reference it took is released and a later
-> `ctx.get` throws `released`; an aborted `fn` that does not stop keeps running, but its references are already
-> released (as a handler after its caller's cancellation). `host.root` before `load` resolved parks its `ctx.get`s
-> like any reference; after `host.close` it rejects `released`. No span of its own until slice 9.
+**Signature and guarantees (D3, owner, 2026-10-27; design §26 #25):** `host.root<T>(fn: (ctx: Ctx) => Promise<T>,
+context: Context, options?: { principal?: P }): Promise<T>`. `fn` gets a call context like a handler's: the host's
+principal (or `options.principal`, a trusted same-host caller's choice, as base code acting for an authenticated
+user), this host's incarnation, `context`'s telemetry and abort signal linked until `fn` settles
+(`withLinkedAbortSignal`), and `ctx.get`. When `fn` settles or `context` aborts, the call context is sealed:
+`ctx.abortSignal` aborted, `ctx.get` rejects `released`, every reference it took released (their calls reject
+`released`, their watches end), so an uncooperative `fn` fails at its next use of Chord, as a handler after its caller
+cancelled; work outside Chord runs on until then. `ctx.get` before `load` resolved parks like any reference;
+`host.root` after `host.close` rejects `released`. No span of its own until slice 9.
 
 - `chord(fn, context)` is p3's helper over `host.root` (design §24); Chord ships none.
 
