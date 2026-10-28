@@ -201,7 +201,7 @@ parent link closes. `resolve` returns the link before the worker has loaded (the
 | `load([{ name, facet }], context)` | facets with their plugin names (the plugin's `package.json` name, npm style; duplicates and invalid names are refused); runs every facet's setup, then waits for the start barrier (section 21); a throwing setup rejects and closes the host; runs once. Loaders are adapters; base code passes its core facet the same way |
 | `connect(link, { principal, trusted?, codec? }, context)` | the link to the parent, at most one open; once it closed (a drop), `connect` takes the next, and every remote reference over the parent is held again on it. `principal` = who the parent is |
 | `accept(link, { principal, trusted?, codec? }, context)` | a link from a child; holds and calls on it act as `principal` |
-| `route(Kind, { authorize, resolve })` | how to reach hosts of a kind (below); called before `load`, once per kind |
+| `route(Kind, { authorize, resolve }, context)` | how to reach hosts of a kind (below); called before `load`, once per kind; work arriving on its links runs under `context` |
 | `get(Type, params, context, { readyTimeout? })` | a reference once its object is live (section 7) |
 | `hold(Type, params, context, { readyTimeout? })` | a reference at once that follows its object until released (section 7) |
 | `close(context)` | closes the links (children, routes, then the parent), then ends every object at once and tears them down, the last to go live first (reason `close`); rejects with an `AggregateError` of the native closes that threw |
@@ -452,7 +452,7 @@ drops, folds or resets.
   server.revoke({ grant: "g1" }, ctx);
   ```
 
-  `host.revoke(r)` ends every object and closes every link whose principal `p` has `r` in `revokedBy(p)` (compared by
+  `host.revoke(r)` ends every object and closes every child link whose principal `p` has `r` in `revokedBy(p)` (compared by
   canonical JSON of each value `revokedBy` returns, computed once per principal; never the host's own principal), and propagates `r` to the children as a `revoke` message on its route links,
   honoured only on a child's parent link, where each applies its own `revokedBy` (the same app code; nothing is
   replayed to a child connected later). Holders of a revoked object get `gone` with `forbidden/revoked` (owner,
@@ -574,7 +574,8 @@ host.serve(Notes, ({ session }, principal, self) =>
   `remote` type lives while referenced (`linger` keeps it briefly after the last reference). No remote object has host
   lifetime: its identity includes the principal, and long-lived parts belong in a local shared store. Below,
   "host-lifetime object" means a `local` object with empty params. Running and finishing job runs keep their
-  object alive as a count, not as references; when the count reaches zero with no holders, the object ends (§15).
+  object alive as a count, not as references, while an attempt is live or activating ("Slice 6a small items" (12)); when
+  the count reaches zero with no holders, the object ends (§15).
 - **Activation** (one fresh attempt each time, bounded by `readyTimeout`, its wait for the previous instance's
   teardown included): the factory runs; singleton documents take `initial()` and, on the object's first activation,
   persisted documents load and its tables' definitions are checked and migrated (slice 6a; the deadline paused during
@@ -604,7 +605,10 @@ host.serve(Notes, ({ session }, principal, self) =>
   reload or `ref.retry()`; live dependents stay live. The members freeze only after the commits admitted before the
   seal adopted and published once, and a retry's factory waits for that (2026-10-27, slice 6a build reviews).
 - **Waiting for dependencies (R18):** an object whose references are not live yet stays `loading` and goes live as
-  soon as they are (bounded by `readyTimeout`). A dependency that fails (`broken` or `transient`), or does not become
+  soon as they are (bounded by `readyTimeout`; a link drop while a dependency is still loading is no failure: the
+  reference re-holds on the next link and the dependent keeps waiting, design audit 6, 2026-10-27). A dependency
+  going live while the dependent still activates is remembered and retries it at once if that attempt fails. A
+  dependency that fails (`broken` or `transient`), or does not become
   live in time, fails the dependent **`transient`** with the dependency's cause inside, never `broken`: the cause is
   the dependency's. The dependent keeps its references while failed, and Chord installs their state as an automatic
   retry trigger: the moment the dependency goes live, the dependent is retried at once (the remaining backoff is
@@ -713,7 +717,7 @@ location are dropped.
   of its variant has a value). A broken failure rejects at once; through transient ones it waits up to its
   `readyTimeout`, then rejects with the last failure's error; a getter that gives up releases its reference.
   **`host.hold`** returns a reference at once that follows its object until released (loading, live, failed and
-  retried as its object is, loading again while its link is down) and never rejects; invalid params and a local type
+  retried as its object is, loading again while its link is down) and never rejects; invalid params (checked at once, also before `load`: design audit 7, 2026-10-27) and a local type
   not served here throw at once (before `load` resolved, these fail the reference broken once it did); its `variant` is
   `undefined` until its first binding (slice 3b). There is no `state: false` option (C8) and no `optional` flag.
 - **Narrowing by variant:** `ref.variant` is the discriminant (C15: no `inVariant`/`expectVariant`); `RefIn<C, V>`
@@ -1149,7 +1153,7 @@ type NativeWatchCall<T> = { kind: "value"; value: T } | { kind: "failed"; error:
   map; `r` drops everything before it); past 10,000 pending ops only "replace with the current value" is kept (no
   size, text or time caps; no folding of list appends or trims; ops come only from Chord's tracker and
   `diffRevisions`, so there are no defences against hand-written ops). `PendingOps` is Chord's shared Delta code. The
-  same queue holds a link hold's ops while its window is full (section 3). Natives: the newest value. Durable's
+  same queue holds a link hold's ops while its window is full (section 3). Natives: every value in order, past 100 pending values one call with the newest (W4). Durable's
   event stream keeps its own queue (events are not state); `stop()` is idempotent, drops pending frames, never aborts or awaits a running call; `stop()` and
   `closed` return the end, tagged by `kind` (owner, 2026-10-27): `stopped`, `aborted` (its context aborted), `ended`,
   `listener_error { error }`, `failed { error }` (a final failure; a recoverable one is a call). Durable's synchronous
@@ -1210,8 +1214,8 @@ source (W1); a dirty derive nobody holds recomputes on its next read. A throwing
   comparisons, not content comparisons:
 
   ```ts
-  const strip = mapShared((n: Note) => ({ text: n.text, at: n.at }));
-  self.derive([notes], ([n]) => ({ list: n.list.map(strip) }));
+  const strip = mapShared((n: Note) => ({ text: n.text, at: n.at }));   // a mapper over the whole array
+  self.derive([notes], ([n]) => ({ list: strip(n.list) }));
   // one appended note: one new object, 2,000 identical references, diffRevisions emits one insert
   ```
 
@@ -1346,7 +1350,7 @@ host.serve(ChatStore, ({ conversation }, self) => {          // local: no princi
   const shell = self.job(ShellJob, {
     run: async ({ command }, ctx) => {
       const out = new OutputBuffer({ maxLines: 2000, retain: "tail" });
-      const progress = throttle(100, () => ctx.state.change((d) => { d.output = out.snapshot().text; }));
+      const progress = throttle(100, () => ctx.state.change((d) => { d.output = out.snapshot().text; }, ctx));
       try {
         const r = await runProcess(command, ctx.abortSignal, (chunk) => { out.push(chunk); progress.schedule(); });
         return { exit: r.code, output: out.snapshot().text };
@@ -1385,7 +1389,7 @@ host.serve(ChatStore, ({ conversation }, self) => {          // local: no princi
   the run, both or neither). `run` starts after the commit.
 - **2. Run:** `run(args, ctx)` may do anything, outside transactions. `ctx` is a `Ctx` (the object's principal for a
   remote type, the host's for a local one) plus `jobId` and `state`: `ctx.state.value` (synchronous) and
-  `ctx.state.change(fn)` (a transaction on the owner's line on the run's document, without the run's abort signal).
+  `ctx.state.change(fn, ctx)` (a transaction on the owner's line on the run's document, without the run's abort signal).
   State changes are accepted until `run` settles, also after an abort (so output written while stopping still reaches `outcome.state`), and are
   refused (`released`) afterwards, never recreating a retired document. Each change is a commit and, while someone
   watches, a message: authors throttle frequent changes themselves (Chord does not coalesce them); awaiting or
@@ -1785,7 +1789,8 @@ validation, no clone of snapshots or ops.
   | Kind | Direction | Fields |
   | --- | --- | --- |
   | `hello` | both, first | `protocol`, `incarnation`, `calls` (the call window N) |
-  | `hold` | to provider | `origin?`, `hold`, `type`, `version`, `fingerprint`, `params` (part), `address?`, `principal?`, `incarnation?` |
+  | `hold` | to provider | `origin?`, `hold`, `type`, `version`, `fingerprint`, `params` (part), `address?`, `principal?`, `incarnation?`, `chain?` (activation chain, Q5), `limit?` (decoded size limit, 4b) |
+  | `revoke` | parent to child (route link) | the revocation value (4b) |
   | `release`, `retry` | to provider | `origin?`, `hold` |
   | `call` | to provider | `origin?`, `call`, `hold`, `method` (index), `args?` (part; absent: no arguments), `segments?` |
   | `abort` | to provider | `origin?`, `call` (named `cancel` until 2026-10-27) |
