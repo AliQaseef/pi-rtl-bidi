@@ -273,8 +273,7 @@ host.route(Session, {
   completed its handshake resets the backoff. Without holds for the address nothing is resolved again, so passive
   viewers recover without a user action while they hold.
 - Chord never closes a route link itself except at `host.close`; stopping idle workers is the app's (`host.activity`).
-- Route links have no app context yet: work arriving on them runs under the background context without telemetry
-  (slice 4b gives routes a context).
+- Work arriving on a route's links runs under the context given to `host.route(Kind, options, context)` (slice 4b).
 
 ### Links
 
@@ -749,7 +748,8 @@ location are dropped.
 | object `failed` | reject at once with the cause | `failed` with cause and `retryAt` |
 
 - A failed reference stays alive: while held, Chord retries per the backoff; `ref.retry()` tries at once (a Retry
-  button; over a link the `retry { hold }` message); success goes `loading`, then `live`. A provider tells a pending
+  button; over a link the `retry { hold }` message, which also re-runs a refused hold's start: authorize, placement,
+  binding; design audit 2026-10-27); success goes `loading`, then `live`. A provider tells a pending
   hold's consumer each failure (`failed`, with the rest of its backoff window) and the next attempt (`loading`).
 - **Parked calls** (slice 3b): calls made while the reference is loading are queued in order, each waiting at most the
   reference's `readyTimeout` from the moment it was made (never renewed), then fail `unavailable/park_timeout`; they
