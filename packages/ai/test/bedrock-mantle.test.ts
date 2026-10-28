@@ -32,6 +32,16 @@ describe("Bedrock Mantle", () => {
 		expect(converse.some((model) => model.id.includes("anthropic.claude"))).toBe(true);
 	});
 
+	it("lists Mantle models from AWS's model cards that models.dev does not", () => {
+		const ids = mantleModels().map((model) => model.id);
+		expect(ids).toEqual(expect.arrayContaining(["openai.gpt-5.6-cyber", "openai.gpt-daybreak-blue-5.6-sol"]));
+	});
+
+	it("uses strict tool schemas on Mantle models that support structured output", () => {
+		const model = mantleModels().find((candidate) => candidate.id === "openai.gpt-5.6-sol");
+		expect(model?.compat).toMatchObject({ supportsStrictMode: true, supportsLongCacheRetention: false });
+	});
+
 	it("sends Responses requests to the regional Mantle host with the Bedrock API key", async () => {
 		const model = mantleModels()[0];
 		const requests: { url: string; authorization: string | null }[] = [];

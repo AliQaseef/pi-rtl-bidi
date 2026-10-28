@@ -1,5 +1,5 @@
 import type { Model } from "../../src/types.ts";
-import { type ChatModel, defineProvider, modelsDevModels, withInputLimits } from "../define.ts";
+import { addMissing, type ChatModel, defineProvider, modelsDevModels, withInputLimits } from "../define.ts";
 import type { ModelsDevModel } from "../sources/models-dev.ts";
 
 // Opus 5 is only callable through cross-region inference profiles.
@@ -24,15 +24,47 @@ function mantleModel(model: ChatModel, source: ModelsDevModel): Model<"openai-re
 		api: "openai-responses",
 		// models.dev writes the region as a `${AWS_REGION}` template.
 		baseUrl: responses.baseUrl.replace(/\$\{AWS_REGION\}/, "{region}"),
-		// Mantle does not document OpenAI's extended prompt cache retention.
-		compat: { supportsLongCacheRetention: false },
+		compat: {
+			// Mantle does not document OpenAI's extended prompt cache retention.
+			supportsLongCacheRetention: false,
+			...(source.structuredOutput ? { supportsStrictMode: true } : {}),
+		},
 	};
 }
 
+/**
+ * Mantle-only models on AWS's model cards that models.dev does not list yet.
+ * Prices and limits come from the model cards:
+ * https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html
+ */
+const MANTLE_MODELS_MISSING_UPSTREAM: Model<"openai-responses">[] = [
+	{
+		id: "openai.gpt-5.6-cyber",
+		name: "Daybreak Red: GPT-5.6 Cyber",
+		cost: { input: 13.75, output: 82.5, cacheRead: 1.375, cacheWrite: 17.1875 },
+		contextWindow: 272_000,
+	},
+	{
+		id: "openai.gpt-daybreak-blue-5.6-sol",
+		name: "Daybreak Blue: GPT-5.6 Sol",
+		cost: { input: 5.5, output: 33, cacheRead: 0.55, cacheWrite: 6.875 },
+		contextWindow: 1_000_000,
+	},
+].map((model) => ({
+	...model,
+	api: "openai-responses",
+	provider: "amazon-bedrock",
+	baseUrl: "https://bedrock-mantle.{region}.api.aws/openai/v1",
+	reasoning: true,
+	input: ["text", "image"],
+	maxTokens: 128_000,
+	compat: { supportsLongCacheRetention: false, supportsStrictMode: true },
+}));
+
 export default defineProvider({
 	id: "amazon-bedrock",
-	models: (ctx) =>
-		modelsDevModels(ctx, "amazon-bedrock", {
+	models: (ctx) => {
+		const models = modelsDevModels(ctx, "amazon-bedrock", {
 			api: "bedrock-converse-stream",
 			baseUrl: "",
 			include: (source) =>
@@ -50,6 +82,8 @@ export default defineProvider({
 					...(source.structuredOutput ? { compat: { supportsStrictMode: true } } : {}),
 				};
 			},
-		}),
+		});
+		return addMissing(models, MANTLE_MODELS_MISSING_UPSTREAM);
+	},
 	finalize: (model) => withInputLimits(model, { images: { maxPerMessage: 20 } }),
 });
