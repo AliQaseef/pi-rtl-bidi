@@ -1518,9 +1518,10 @@ const router = self.registry(Http).value;     // live (host.registry(Http) outsi
   `compose(table, { report })` is pure and runs whenever the table changes (after a commit, when a contributor goes
   live or ends, when a dynamic contribution changes). It always delivers a value with its fallback built in (e.g. the
   first by plugin name wins) and reports conflicts through `report` (owner notices and telemetry events); readers get
-  a plain value and never handle conflicts. Only if `compose` throws is the registry in an error state, and readers
-  get an error when they use it. Work that started earlier keeps the value it read (a pinned Durable phase keeps its
-  old table). Helpers: `keyed(table, entriesOf)`, `ordered(table, itemsOf, orderOf?)`.
+  a plain value and never handle conflicts. If `compose` throws, the failure is reported and its
+  watches get a `failed` call, while `.value` keeps the last good composition (slice 8); only before any good
+  composition do readers get the error. Work that started earlier keeps the value it read (a pinned Durable phase keeps
+  its old table). Helpers: `keyedEntries(table, entriesOf, report)`, `orderedEntries(table, itemsOf, orderOf?)`.
 - **Who contributes (R21):** only facets and host-lifetime objects (`local`, empty params); their factory's `self` has `contribute`, a
   referenced object's `self` does not (a type error). Reading a registry's composed value stays open to every object.
 - **A contribution is in the table exactly while its contributor is live:** a facet's while its plugin is loaded; an
