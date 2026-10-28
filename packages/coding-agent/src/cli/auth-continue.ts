@@ -2,12 +2,12 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { stdin as input, stdout as output } from "node:process";
 import { createInterface, type Interface } from "node:readline/promises";
-import type { AuthEvent, AuthPrompt, AuthResult } from "@earendil-works/pi-ai";
-import type { McpOAuthState } from "@earendil-works/pi-mcp/oauth";
+import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
 import chalk from "chalk";
 import { APP_NAME } from "../config.ts";
 import { ModelRuntime } from "../core/model-runtime.ts";
 import { openBrowser } from "../utils/open-browser.ts";
+import { getAuthCredential } from "./auth-command.ts";
 
 export class AuthContinueError extends Error {}
 
@@ -211,29 +211,10 @@ async function readPayloadFromUser(): Promise<string> {
 	}
 }
 
-function normalizeServiceUrl(value: string): string {
-	const url = new URL(value);
-	url.pathname = url.pathname.replace(/\/$/u, "");
-	url.search = "";
-	url.hash = "";
-	return url.href;
-}
-
-function continuationEndpoint(
-	payload: AuthContinuationPayload,
-	kind: "claim" | "complete",
-	serviceUrl: string,
-): string {
-	const url = new URL(`/v1/auth/continuations/${encodeURIComponent(payload.continuationId)}/${kind}`, serviceUrl);
-	return url.href;
-}
-
-function credentialFromAuth(auth: AuthResult | undefined): string | undefined {
-	if (auth?.auth.apiKey) return auth.auth.apiKey;
-	const authorization = Object.entries(auth?.auth.headers ?? {}).find(
-		([name]) => name.toLowerCase() === "authorization",
-	)?.[1];
-	return typeof authorization === "string" ? /^Bearer\s+(.+)$/iu.exec(authorization)?.[1] : undefined;
+/** The endpoint path is absolute, so only the origin of `serviceUrl` matters. */
+function continuationEndpoint(payload: AuthContinuationPayload, kind: "claim" | "complete"): string {
+	return new URL(`/v1/auth/continuations/${encodeURIComponent(payload.continuationId)}/${kind}`, payload.serviceUrl)
+		.href;
 }
 
 function printAuthEvent(event: AuthEvent): void {
@@ -270,7 +251,7 @@ async function getContinuationServiceToken(providerId: string, signal: AbortSign
 	const runtime = await ModelRuntime.create({ allowModelNetwork: false, signal });
 	let token: string | undefined;
 	try {
-		token = credentialFromAuth(await runtime.getAuth(providerId, { minOAuthValidityMs: 5 * 60_000, signal }));
+		token = getAuthCredential(await runtime.getAuth(providerId, { minOAuthValidityMs: 5 * 60_000, signal }));
 	} catch (error) {
 		if (signal.aborted) throw error;
 		console.log(
@@ -296,7 +277,7 @@ async function getContinuationServiceToken(providerId: string, signal: AbortSign
 	} finally {
 		rl.close();
 	}
-	token = credentialFromAuth(await runtime.getAuth(providerId, { minOAuthValidityMs: 5 * 60_000, signal }));
+	token = getAuthCredential(await runtime.getAuth(providerId, { minOAuthValidityMs: 5 * 60_000, signal }));
 	if (!token) throw new AuthContinueError("Sign-in did not produce a bearer token");
 	return token;
 }
@@ -331,16 +312,14 @@ async function postContinuation(
 async function completeMcpContinuation(
 	payload: AuthContinuationPayload,
 	token: string,
-	serviceUrl: string,
 	body: JsonObject,
 	signal: AbortSignal,
 ): Promise<void> {
 	const uploadSignal = AbortSignal.any([signal, AbortSignal.timeout(30_000)]);
 	await postContinuation(
-		continuationEndpoint(payload, "complete", serviceUrl),
+		continuationEndpoint(payload, "complete"),
 		token,
 		{
-			continuationId: payload.continuationId,
 			secret: payload.secret,
 			mcp: {
 				serverUrl: payload.mcp.serverUrl,
@@ -356,7 +335,6 @@ async function completeMcpContinuation(
 async function runMcpBearerContinuation(
 	payload: BearerAuthContinuationPayload,
 	token: string,
-	serviceUrl: string,
 	signal: AbortSignal,
 ): Promise<void> {
 	const rl = createInterface({ input, output });
@@ -369,7 +347,7 @@ async function runMcpBearerContinuation(
 	} finally {
 		rl.close();
 	}
-	await completeMcpContinuation(payload, token, serviceUrl, { bearerToken }, signal);
+	await completeMcpContinuation(payload, token, { bearerToken }, signal);
 	openBrowser(payload.returnUrl);
 	console.log(chalk.green("MCP bearer token uploaded."));
 }
@@ -377,7 +355,6 @@ async function runMcpBearerContinuation(
 async function runMcpOAuthContinuation(
 	payload: OAuthAuthContinuationPayload,
 	token: string,
-	serviceUrl: string,
 	signal: AbortSignal,
 ): Promise<void> {
 	const [{ MemoryOAuthStateStore }, { signInMcpServer, McpSignInCancelledError }] = await Promise.all([
@@ -385,28 +362,20 @@ async function runMcpOAuthContinuation(
 		import("../extensions/mcp/oauth.ts"),
 	]);
 	const store = new MemoryOAuthStateStore();
-	let state: McpOAuthState | undefined;
-	const captureStore = {
-		load: () => store.load(),
-		save: (next: McpOAuthState) => {
-			state = structuredClone(next);
-			store.save(next);
-		},
-	};
 	let uploaded = false;
 	let browserResponseSent = false;
 	const upload = async (): Promise<void> => {
-		state ??= store.load();
+		const state = store.load();
 		if (!state?.tokens) throw new AuthContinueError("MCP sign-in did not produce OAuth tokens");
 		console.log(chalk.dim("Uploading MCP authentication to continuation service..."));
-		await completeMcpContinuation(payload, token, serviceUrl, { authState: state }, signal);
+		await completeMcpContinuation(payload, token, { authState: state }, signal);
 		uploaded = true;
 	};
 	const rl = createInterface({ input, output });
 	try {
 		const result = await signInMcpServer({
 			serverUrl: payload.mcp.serverUrl,
-			store: captureStore,
+			store,
 			settings: {
 				scope: payload.mcp.oauth?.scope,
 				clientName: payload.mcp.oauth?.clientName ?? APP_NAME,
@@ -449,36 +418,25 @@ async function runMcpOAuthContinuation(
 	console.log(chalk.green("MCP authentication uploaded."));
 }
 
-async function runMcpContinuation(
-	payload: AuthContinuationPayload,
-	token: string,
-	serviceUrl: string,
-	signal: AbortSignal,
-): Promise<void> {
+async function runMcpContinuation(payload: AuthContinuationPayload, token: string, signal: AbortSignal): Promise<void> {
 	if (isBearerContinuation(payload)) {
-		await runMcpBearerContinuation(payload, token, serviceUrl, signal);
+		await runMcpBearerContinuation(payload, token, signal);
 		return;
 	}
 	if (isOAuthContinuation(payload)) {
-		await runMcpOAuthContinuation(payload, token, serviceUrl, signal);
+		await runMcpOAuthContinuation(payload, token, signal);
 		return;
 	}
-	await completeMcpContinuation(payload, token, serviceUrl, {}, signal);
+	await completeMcpContinuation(payload, token, {}, signal);
 	openBrowser(payload.returnUrl);
 	console.log(chalk.green("MCP connection saved."));
 }
 
 export async function runAuthContinuation(payload: AuthContinuationPayload): Promise<void> {
-	const serviceUrl = normalizeServiceUrl(payload.serviceUrl);
 	const signal = AbortSignal.timeout(15 * 60_000);
 	const token = await getContinuationServiceToken(payload.providerId, signal);
-	await postContinuation(
-		continuationEndpoint(payload, "claim", serviceUrl),
-		token,
-		{ continuationId: payload.continuationId, secret: payload.secret },
-		signal,
-	);
-	await runMcpContinuation(payload, token, serviceUrl, signal);
+	await postContinuation(continuationEndpoint(payload, "claim"), token, { secret: payload.secret }, signal);
+	await runMcpContinuation(payload, token, signal);
 }
 
 export async function runAuthContinueCommand(args: string[]): Promise<void> {

@@ -22,14 +22,15 @@ const AUTH_COMMAND_USAGE: Record<AuthCommandKind, string> = {
 	continue: `${APP_NAME} auth --continue [payload]`,
 };
 
+const AUTH_COMMAND_NAME: Record<AuthCommandKind, string> = {
+	check: "auth check",
+	api_key: "auth print-api-key",
+	bearer_token: "auth print-bearer-token",
+	continue: "auth --continue",
+};
+
 export function getAuthCommandName(kind: AuthCommandKind): string {
-	return kind === "check"
-		? "auth check"
-		: kind === "api_key"
-			? "auth print-api-key"
-			: kind === "bearer_token"
-				? "auth print-bearer-token"
-				: "auth --continue";
+	return AUTH_COMMAND_NAME[kind];
 }
 
 export function getAuthCommandUsage(kind: AuthCommandKind): string {
