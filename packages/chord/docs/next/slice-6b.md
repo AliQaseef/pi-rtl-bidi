@@ -1,12 +1,7 @@
 # Slice 6b: Durable and jobs on the store (spec)
 
-Status: **ready to build** (2026-10-27): D1-D9, R1-R4 and the claims decided by the owner (decision log, entries
-"Slice 6b …" and "owner names and claims"); two spec reviews (`/tmp/s6b-review{,2}-{astra,fable,opus,sol}.md`)
-kept every decision; this version closes their findings. Written by the redesign session after reading, in full,
-Durable's `types.ts`, its SQLite storage, schema and migrations, the storage conformance suite and benchmark,
-`session/session.ts`, `session/transaction.ts`, `session/forks.ts`, the scheduler's restarts, `writeAtClose` and `abort`,
-and Chord v2's store, engine, applier, commit step and jobs. Durable's memory, JSONL and IndexedDB storages stay as they
-are (S15).
+Status: **built** (2026-10-28, pi `14b4c56e5`: one build, a build review and two fix rounds by the four spec reviewers;
+reopen, the one-entry commit's mean and the resume watch's CPU accepted by the owner). Was: ready to build (2026-10-27).
 
 The single source for building 6b, together with `design.md` read in full; the decision log `decisions.md` (later
 entries win), in particular "The store", S1, S2, S4, S10, S11, S13, S15, W1, W12, "Slice 6 first decisions", "Durable's
