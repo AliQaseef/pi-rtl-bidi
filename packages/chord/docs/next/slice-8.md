@@ -15,13 +15,12 @@ is p3's base code; Chord shows it only in an example.
 
 ```ts
 // the defining plugin (e.g. http): the token, exported for other plugins
-export const Http = defineRegistry<HttpContribution, Router>("chord.http", {
-  version: 2,
-  accepts: { 1: (old: HttpContributionV1): HttpContribution => upgrade(old) },
-  compose: (table, { report }) => buildRouter(table, report),    // pure; always a value; conflicts reported
-});
+export const Http = defineRegistry<HttpContribution, Router>("chord.http", { version: 2 });   // shared: identity only
 export default defineFacet((host, self) => {
-  self.declare(Http);                                             // the one authoritative declaration (Q8)
+  host.serve(Http, {                                              // the one provider (Q8), as for object types
+    compose: (table, { report }) => buildRouter(table, report),   // pure; always a value; conflicts reported
+    accepts: { 1: (old: HttpContributionV1): HttpContribution => upgrade(old) },
+  });
   host.serve(HttpServer, (_, self) => {
     const router = self.registry(Http);                           // a NativeWatchable of the composed value
     self.on(router, ({ value }, ctx) => …);
@@ -47,16 +46,11 @@ await host.root(async (ctx) => (await ctx.get(Notes, { session })).add(note, ctx
 
 ## 1. Registries
 
-- **Token:** `defineRegistry<C, V>(name, { version, accepts?, compose })` (names as types, `[a-z0-9@/._~-]`): the
-  registry's identity (name, `C` the contribution type, `V` the composed value type) and the defining plugin's
-  declaration in one object; every plugin's bundled copy carries the version it was built against.
-
-> **Decision needed (D1): how the defining plugin declares.** Q8: one authoritative declaration, from the defining
-> plugin's facet; other plugins' tokens only identify the registry. Options: (a) `self.declare(Http)` in the defining
-> facet: the token carries `compose` and `accepts`, the host uses those of the declaring facet's copy only; (b) the
-> token is name and types only (`defineRegistry<C, V>("chord.http")`), and the facet declares `self.declare(Http, {
-> version, compose, accepts })`. Proposal: (a), the shape design §17 shows: one object, and a token used for
-> contributing never has its `compose` called.
+- **Token and provider (D1, owner, 2026-10-27):** the token `defineRegistry<C, V>(name, { version })` is shared, as a
+  contract: its name (as types, `[a-z0-9@/._~-]`), the contribution type `C`, the composed value type `V`, and the
+  version the bundling plugin was built against. The defining plugin's facet provides it with `host.serve(R, {
+  compose, accepts? })`, as it serves object types (adapters with the provider, never in the shared token, as
+  `checkAccepts` for contracts); a second serve on a host is refused; a reload replaces it (slice 7).
 
 - **Contributors** (R21): facets (by plugin name) and host-lifetime objects (`local`, empty params: by plugin name and
   type), at most one value per registry each; `self.contribute(R, value | Watchable | NativeWatchable)` in a facet setup
@@ -71,9 +65,9 @@ await host.root(async (ctx) => (await ctx.get(Notes, { session })).add(note, ctx
   `report(conflict)` goes to `onError` as `registry_conflict { registry, message, plugins }`. A throwing `compose`
   makes the composed value fail: its watches get a `failed` call, `.value` throws the error, the next good compose heals
   it ("Failures are watch calls").
-- **Without a declaration** (the defining plugin is not loaded): the composed value is failed with
-  `unavailable/undeclared` (readers see the error as from a failed reference); contributions wait in the table; a
-  declaration heals it.
+- **Without a provider** (the defining plugin is not loaded): the composed value is failed with
+  `unavailable/undeclared` (readers see the error as from a failed reference); contributions wait in the table; its
+  serve heals it.
 - **Reading:** `self.registry(R)` in any object's factory returns a `NativeWatchable<V>` (a derive source, an `on`
   source, a `retryOn` source); methods and routines read `.value` at use; `host.registry(R)` for code outside objects.
 - **Helpers:** `keyed(table, entriesOf)` (a map, a duplicate key reported, the first by plugin name wins) and
@@ -136,7 +130,7 @@ atomically; staging composes nothing, decision D1 of "Review round 1"); `accepts
 
 ## 7. Tests and cost
 
-- One `describe` per mechanism: tokens and declarations (two declarations refused, a missing one healing), contributors
+- One `describe` per mechanism: tokens and providers (two serves refused, a missing one healing), contributors
   (R21's type and runtime refusals, facet and object lifetimes, one value each), the table (order by plugin, versions
   adapted, refused versions reported), `compose` (in the flush, after a commit that changed a watchable contribution,
   conflicts reported, a throw as a failure call and its heal), reading (`self.registry` in derives and `on`, `.value` at

@@ -1736,6 +1736,12 @@ validation and copies the v2 kernel added around Delta.
   `(owner, namespace)`; so the object that opens Durable can also declare its own persisted data under the same owner
   name, and two harnesses can share a store under two owner names (owner: "seems like they could"); a second
   `StoreStorage` on the same owner is refused by its tables. "One harness per store" is no rule, only how p3 uses it.
+- **Slice 8 D1: a registry's token is shared, its provider serves it (owner, 2026-10-27: "b", "yes"):** the token
+  `defineRegistry<C, V>(name, { version })` carries identity only (bundled by every contributor, as a contract); the
+  defining plugin's facet provides it with `host.serve(R, { compose, accepts? })`, as it serves object types. One rule
+  for versioned things: a shared definition (object types, registries) keeps its adapters with the provider; a
+  definition of one owner (documents, tables, `json(...)` columns, jobs) keeps them in itself. Refines Q8's "one
+  authoritative declaration" (the serve is it) and design §17's example.
 - **The performance and memory bar, and converging reviews (owner, 2026-10-27: "yes"):** supersedes "as good as
   HEAD in everything" for Chord v2 slices and pi changes. CPU: each hot path (calls, changes, watches, links) within
   about 5% of HEAD, measured in bursts with alternating processes pinned to one CPU; worse is fixed or goes to the
