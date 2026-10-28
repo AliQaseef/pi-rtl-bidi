@@ -62,9 +62,13 @@ await host.root(async (ctx) => (await ctx.get(Notes, { session })).add(note, ctx
   `contribution_refused { registry, plugin, version }`).
 - **`compose(table, { report })`:** pure, runs whenever the table changes (a contributor goes live or ends, a
   contribution that is a watchable changes), in the owner's flush, never inside another owner's commit step (W4);
-  `report(conflict)` goes to `onError` as `registry_conflict { registry, message, plugins }`. A throwing `compose`
-  makes the composed value fail: its watches get a `failed` call, `.value` throws the error, the next good compose heals
-  it ("Failures are watch calls").
+  `report(conflict)` goes to `onError` as `registry_conflict { registry, message, plugins }`.
+- **Failures (owner, 2026-10-27):** contributions never fail the registry. A contribution that is a watchable and fails
+  is left out of the table and reported (`contribution_failed { registry, plugin, error }`), the table recomposes without
+  it, and it is back once it heals. A `compose` that throws (the owner's bug) is reported (`registry_failed { registry,
+  error }`), the composed value's watches get a `failed` call, and `.value` keeps the last good composition (an extension
+  point stays available; derives keep their own rule, `.value` throwing while failed); the next good composition
+  replaces it. Before any good composition `.value` throws the error.
 - **Without a provider** (the defining plugin is not loaded): the composed value is failed with
   `unavailable/undeclared` (readers see the error as from a failed reference); contributions wait in the table; its
   serve heals it.

@@ -1742,6 +1742,11 @@ validation and copies the v2 kernel added around Delta.
   for versioned things: a shared definition (object types, registries) keeps its adapters with the provider; a
   definition of one owner (documents, tables, `json(...)` columns, jobs) keeps them in itself. Refines Q8's "one
   authoritative declaration" (the serve is it) and design §17's example.
+- **Slice 8: registry failures (owner, 2026-10-27: "ok", "agree"):** contributions never fail a registry: a
+  watchable contribution that fails is left out of the table and reported (`contribution_failed`), back once healed;
+  a throwing `compose` (the owner's bug) is reported (`registry_failed`), its watches get a `failed` call, and `.value`
+  keeps the last good composition (before any, it throws). Derives keep `.value` throwing while failed: state must match
+  its sources, an extension point must stay available.
 - **The performance and memory bar, and converging reviews (owner, 2026-10-27: "yes"):** supersedes "as good as
   HEAD in everything" for Chord v2 slices and pi changes. CPU: each hot path (calls, changes, watches, links) within
   about 5% of HEAD, measured in bursts with alternating processes pinned to one CPU; worse is fixed or goes to the
