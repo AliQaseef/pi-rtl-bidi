@@ -1753,6 +1753,11 @@ validation and copies the v2 kernel added around Delta.
   until `fn` settles, `ctx.get`); at settle or abort the context is sealed (`ctx.get` rejects `released`, its references
   released, their calls reject), so an uncooperative `fn` fails at its next use of Chord; before `load` its gets park;
   after `host.close` it rejects `released`. `chord(fn, context)` is p3's helper. Closes design §26 #25.
+- **Slice 8 S1: a Session close fails Durable's observers (owner, 2026-10-27: "a"; spec review, all four reviewers):**
+  Durable ends an observer `failed` (error "session closed") when its Session closes, and `ended` only when the
+  observed owner ended (a task document's task); refines R4 (Durable change, upstream). So a follower of a harness
+  reached through a registry fails `transient` when that harness closes, and its retry follows the new one. A
+  `retryOn` wake that arrives while the object activates is kept and retries it at once if that attempt fails.
 - **The performance and memory bar, and converging reviews (owner, 2026-10-27: "yes"):** supersedes "as good as
   HEAD in everything" for Chord v2 slices and pi changes. CPU: each hot path (calls, changes, watches, links) within
   about 5% of HEAD, measured in bursts with alternating processes pinned to one CPU; worse is fixed or goes to the
