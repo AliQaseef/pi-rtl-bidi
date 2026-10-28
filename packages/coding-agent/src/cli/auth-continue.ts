@@ -100,16 +100,56 @@ function decodeBase64Json(inputValue: string): unknown {
 	return JSON.parse(Buffer.from(padded, "base64").toString("utf8"));
 }
 
+function parseHttpUrl(value: string, field: string): URL {
+	let url: URL;
+	try {
+		url = new URL(value);
+	} catch {
+		throw new AuthContinueError(`${field} must be a URL`);
+	}
+	if (url.protocol !== "https:" && url.protocol !== "http:") {
+		throw new AuthContinueError(`${field} must be an http(s) URL`);
+	}
+	return url;
+}
+
+function isLocalhost(hostname: string): boolean {
+	return hostname === "localhost" || hostname.endsWith(".localhost");
+}
+
+/**
+ * Same origin, except that `localhost` and `*.localhost` count as one host. A local service may be
+ * reached at `localhost` (Node cannot resolve `*.localhost`) while its pages live on a `*.localhost`
+ * name; both always resolve to this machine.
+ */
+function isSameServiceOrigin(a: URL, b: URL): boolean {
+	if (a.origin === b.origin) return true;
+	return a.protocol === b.protocol && a.port === b.port && isLocalhost(a.hostname) && isLocalhost(b.hostname);
+}
+
+/**
+ * The return URL is opened in the browser and used as the callback redirect, so it must belong to the
+ * continuation service; otherwise a payload could open local files and apps or redirect to another site.
+ */
+function requiredReturnUrl(value: unknown, serviceUrl: string): string {
+	const returnUrl = parseHttpUrl(requiredString(value, "returnUrl"), "returnUrl");
+	if (!isSameServiceOrigin(returnUrl, parseHttpUrl(serviceUrl, "serviceUrl"))) {
+		throw new AuthContinueError("returnUrl must have the same origin as serviceUrl");
+	}
+	return returnUrl.href;
+}
+
 function parseAuthContinuationObject(raw: unknown): AuthContinuationPayload {
 	const object = asObject(raw, "Continuation payload");
 	if (object.version !== 1) throw new AuthContinueError("version must be 1");
+	const serviceUrl = requiredString(object.serviceUrl, "serviceUrl");
 	const base: AuthContinuationBase = {
 		version: 1,
-		serviceUrl: requiredString(object.serviceUrl, "serviceUrl"),
+		serviceUrl,
 		providerId: requiredString(object.providerId, "providerId"),
 		continuationId: requiredString(object.continuationId, "continuationId"),
 		secret: requiredString(object.secret, "secret"),
-		returnUrl: requiredString(object.returnUrl, "returnUrl"),
+		returnUrl: requiredReturnUrl(object.returnUrl, serviceUrl),
 	};
 	const mcpRaw = asObject(object.mcp, "mcp");
 	const mcpBase: McpContinuationBase = {

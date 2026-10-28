@@ -169,4 +169,59 @@ describe("credential print commands", () => {
 		expect(decodeAuthContinuationPayload(encoded)).toMatchObject(payload);
 		expect(decodeAuthContinuationPayload(`pi auth --continue ${encoded}`)).toMatchObject(payload);
 	});
+
+	test("accepts a *.localhost returnUrl for a localhost serviceUrl", () => {
+		const payload = {
+			version: 1,
+			serviceUrl: "http://localhost:8787",
+			providerId: "radius-dev",
+			continuationId: "cont_123",
+			secret: "one-time-secret",
+			returnUrl: "http://radius.localhost:8787/connections?status=oauth-connected",
+			mcp: { serverUrl: "https://mcp.example/mcp", serverName: "example", authType: "none" },
+		};
+		const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
+		expect(decodeAuthContinuationPayload(encoded)).toMatchObject(payload);
+	});
+
+	test.each([
+		["localhost on another port", "http://localhost:8787", "http://radius.localhost:9999/x"],
+		["localhost with another scheme", "http://localhost:8787", "https://radius.localhost:8787/x"],
+		["a non-localhost service", "https://auth.example", "https://radius.localhost/x"],
+		["a lookalike localhost host", "http://localhost:8787", "http://evillocalhost:8787/x"],
+	])("rejects a localhost returnUrl with %s", (_name, serviceUrl, returnUrl) => {
+		const encoded = Buffer.from(
+			JSON.stringify({
+				version: 1,
+				serviceUrl,
+				providerId: "radius-dev",
+				continuationId: "cont_123",
+				secret: "one-time-secret",
+				returnUrl,
+				mcp: { serverUrl: "https://mcp.example/mcp", serverName: "example", authType: "none" },
+			}),
+		).toString("base64url");
+		expect(() => decodeAuthContinuationPayload(encoded)).toThrow("same origin as serviceUrl");
+	});
+
+	test.each([
+		["another origin", "https://evil.example/connections", "same origin as serviceUrl"],
+		["another port", "https://auth.example:8443/connections", "same origin as serviceUrl"],
+		["a file URL", "file:///Applications/Calculator.app", "http(s) URL"],
+		["a custom scheme", "vscode://open?url=x", "http(s) URL"],
+		["a non-URL", "not a url", "must be a URL"],
+	])("rejects a returnUrl with %s", (_name, returnUrl, message) => {
+		const encoded = Buffer.from(
+			JSON.stringify({
+				version: 1,
+				serviceUrl: "https://auth.example",
+				providerId: "auth-service",
+				continuationId: "cont_123",
+				secret: "one-time-secret",
+				returnUrl,
+				mcp: { serverUrl: "https://mcp.example/mcp", serverName: "example", authType: "none" },
+			}),
+		).toString("base64url");
+		expect(() => decodeAuthContinuationPayload(encoded)).toThrow(message);
+	});
 });
