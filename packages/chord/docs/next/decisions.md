@@ -1764,6 +1764,11 @@ validation and copies the v2 kernel added around Delta.
   a reader bundling an older token gets the composed value mapped to its version (computed once per composition and
   version, only while such a reader exists); without a `value` mapping, or for a reader newer than the provider, its
   value is failed `contract_mismatch` (reported).
+- **Slice 8 S3: `self.registry` is a dependency, as `self.get` (owner, 2026-10-27: "isn't self.registry meant to wait
+  like self.get?"; my spec had it as a plain read, a mistake against design §6, §7 and §17):** activation waits until
+  the registry has a value (served and composed once; an empty table composes too, at the serve), bounded by
+  `readyTimeout`; without one in time the object fails `transient` (`unavailable/undeclared`) and is retried when the
+  registry gets its first value (R18); once live, a later failure of the registry changes nothing (last good value).
 - **The performance and memory bar, and converging reviews (owner, 2026-10-27: "yes"):** supersedes "as good as
   HEAD in everything" for Chord v2 slices and pi changes. CPU: each hot path (calls, changes, watches, links) within
   about 5% of HEAD, measured in bursts with alternating processes pinned to one CPU; worse is fixed or goes to the
