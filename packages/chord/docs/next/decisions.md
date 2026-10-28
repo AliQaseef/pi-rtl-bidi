@@ -1723,6 +1723,10 @@ validation and copies the v2 kernel added around Delta.
   `SqliteStorage`'s `prefix`, checked by the store. Objects never see the store: their API writes to the host's store
   under their type; a host without a store fails an object declaring persisted data (`broken`, 6a). Rejected: an owner
   handle (`self.storage`), an indirection that only added protection against trusted code.
+- **Slice 6b R3: a seal is a clean stop for persisted runs (owner, 2026-10-27: "a"):** a persisted run cut off by
+  its attempt's seal while the object continues (a live failure, then a retry) is written back stopped, and the next
+  live attempt resumes it per its `resume` (rerun or abandon) without counting a restart, as after a clean close (D6).
+  In-memory runs keep 6a's rule (`failed { aborted, reason: "restart" }`, finished on the next live attempt).
 - **The performance and memory bar, and converging reviews (owner, 2026-10-27: "yes"):** supersedes "as good as
   HEAD in everything" for Chord v2 slices and pi changes. CPU: each hot path (calls, changes, watches, links) within
   about 5% of HEAD, measured in bursts with alternating processes pinned to one CPU; worse is fixed or goes to the
