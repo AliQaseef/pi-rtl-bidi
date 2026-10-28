@@ -136,7 +136,8 @@ Every item below changes 6a's code; nothing is deployed, so the schema and the a
 ### 1.6 The archive and batch apply
 
 - **Format 1 gains** (nothing deployed): `document.create` carries `history`, `retiredAt?` and `meta`; a
-  `document.revision { id, seq, kind, version, content }` part per kept revision, in seq order after its create; for
+  `document.revision { id, seq, content }` (`content` a `DocumentContent`: `{ kind: "base", version, value }` or `{ kind:
+  "delta", version, ops }`) part per kept revision, in seq order after its create; for
   live `none` and `latest` records only the current base and its deltas are exported (as 6a); a retired `latest` record
   is exported as its record alone (no base: its content was dropped at retirement); for `rewindable` every revision,
   retired records included. Import checks: revisions in seq order, a base first, `seq <= lastSeq`, lifetimes
@@ -319,8 +320,9 @@ does nothing.
   joined and stored, abort racing an outcome, deferred state merged, flushed at the outcome and at close, pinned past
   the retention); GC (closed `StoreStorage`, ended follow sources, cancelled abort waiters, deferred timers, settled and
   dropped runs).
-- **Examples:** `26-durable-on-the-store.ts` (a worker with Durable's Session and a Chord store object on one store,
-  exporting the archive), `27-durable-views.ts`, `28-persisted-jobs.ts`.
+- **Examples:** Durable's `test/examples/35-durable-on-the-store.ts` (a worker with Durable's Session and a Chord store
+  object on one store, exporting the archive) and `36-durable-views.ts` (Chord's tests import nothing of Durable);
+  Chord's `28-persisted-jobs.ts`.
 
 ## Carry-over taken
 
