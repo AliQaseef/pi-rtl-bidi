@@ -181,8 +181,9 @@ export interface Host<P extends Principal = Principal, R extends JsonValue = Jso
 	get<C extends Contract>(Type: C, params: ParamsOf<C>, context: Context, options?: GetOptions): Promise<Reference<C>>;
 	/**
 	 * A reference at once, following its object until released: loading, live, failed (retried as its object is) and
-	 * loading again while its link is down; it never rejects. Throws at once for invalid params and a local type not
-	 * served here; before `load` resolved these are decided once it did, failing the reference broken. Its `variant` is `undefined` until its first binding.
+	 * loading again while its link is down; it never rejects. Throws at once for invalid params (also before `load`)
+	 * and a local type not served here; before `load` resolved, a type not served here fails the reference broken once
+	 * it did. Its `variant` is `undefined` until its first binding.
 	 */
 	hold<C extends Contract>(Type: C, params: ParamsOf<C>, context: Context, options?: GetOptions): Held<C>;
 	/**
@@ -641,9 +642,9 @@ export class ChordHost<P extends Principal = Principal, R extends JsonValue = Js
 	}
 
 	/**
-	 * A reference to `Type` made by `caller` for `host.hold` and getters: params and where it goes checked at once
-	 * (`invalid/params`, `#assertRoute`), then bound (a placement or route that fails fails the reference broken);
-	 * before `load` resolved, both once it did (a host closed meanwhile releases it).
+	 * A reference to `Type` made by `caller` for `host.hold` and getters: params checked at once (`invalid/params`,
+	 * also before `load`), where it goes too (`#assertRoute`), then bound (a placement or route that fails fails the
+	 * reference broken); before `load` resolved, where it goes once it did (a host closed meanwhile releases it).
 	 */
 	#hold(Type: Contract, params: unknown, caller: Caller, context: Context, options: GetOptions): Binding {
 		this.#assertOpen();
@@ -667,14 +668,19 @@ export class ChordHost<P extends Principal = Principal, R extends JsonValue = Js
 
 	/**
 	 * Binds a reference (`bind`); where it cannot go (`#assertRoute`, a placement or `authorize` that throws or refuses)
-	 * fails it broken.
+	 * fails it broken, until `ref.retry()` binds it again.
 	 */
 	#bindOrFail(binding: Binding, Type: Contract, checked: CheckedParams, context: Context): void {
 		try {
 			this.#assertRoute(Type);
 			this.bind(binding, Type, checked, context);
 		} catch (error) {
-			binding.refuse({ kind: "broken", error: asChordError(error, Type.name) });
+			// A retry after the host closed ends the reference as the close did the others.
+			const again = () =>
+				this.#state === "closed"
+					? binding.end(this.#closedError())
+					: this.#bindOrFail(binding, Type, checked, context);
+			binding.refuse({ kind: "broken", error: asChordError(error, Type.name) }, again);
 		}
 	}
 

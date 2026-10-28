@@ -335,7 +335,7 @@ forEachCodec(() => {
 	});
 
 	describe("self.get through a relay whose upstream dropped (R18)", () => {
-		it("a loading notice while loading fails the dependent at once, transient; bound retries it", async () => {
+		it("a loading notice while loading changes nothing: the dependent goes on waiting and goes live when bound", async () => {
 			const View = local("app.view", { version: 1, params: {}, members: { count: int() } });
 			const errors: HostError[] = [];
 			const client = createHost({ onError: (error) => errors.push(error) });
@@ -347,19 +347,12 @@ forEachCodec(() => {
 			);
 			const loading = client.load([{ name: "@test/view", facet }], context);
 			const { hold } = await peer.next("hold");
-			// The relay's upstream link dropped before the hold was bound: no wait for the readyTimeout.
+			// The relay's upstream link dropped before the hold was bound: a drop is not a dependency failure (audit).
 			peer.send({ kind: "loading", hold });
+			await transported();
+			bindHold(peer, hold, [{ text: "a" }]);
 			await loading;
-			expect(errors).toMatchObject([
-				{
-					kind: "activation_failed",
-					object: "app.view",
-					failure: { kind: "transient", error: { message: expect.stringContaining("app.notes") } },
-				},
-			]);
-			bindHold(peer, hold);
-			const retried = await bindNext(peer, [{ text: "a" }]);
-			expect(retried).toBe(1);
+			expect(errors).toEqual([]);
 			const view = await client.get(View, {}, context);
 			expect(view.count.value).toBe(1);
 		});
@@ -631,6 +624,64 @@ forEachCodec(() => {
 			expect(notes.state.value).toEqual({ kind: "live" });
 		});
 
+		it("ref.retry() of a broken failure sends retry on the same hold: no release, no new hold (audit)", async () => {
+			const { client, peer } = await rawProvider();
+			const notes = client.hold(Notes, { session: "S1" }, context);
+			const { hold } = await peer.next("hold");
+			const error = { code: "forbidden", message: "not authorized" } as const;
+			peer.send({ kind: "failed", hold, cause: { kind: "broken", error: { kind: "chord", error } } });
+			await transported();
+			expect(notes.state.value).toMatchObject({ kind: "failed", cause: { kind: "broken" } });
+			notes.retry();
+			expect(await peer.next("retry")).toEqual({ kind: "retry", hold });
+			bindHold(peer, hold);
+			await transported();
+			expect(notes.state.value).toEqual({ kind: "live" });
+			expect(peer.received.filter(({ kind }) => kind === "hold" || kind === "release")).toEqual([]);
+		});
+
+		it("ref.retry() of an object whose factory threw, held twice: failed, loading, live; a call made then succeeds (audit)", async () => {
+			const Flaky = remote("app.flaky", {
+				version: 1,
+				params: {},
+				variants: { only: { state: {}, methods: { ping: method() } } },
+			});
+			let factories = 0;
+			const { client } = await linked((h) =>
+				h.serve(Flaky, () => {
+					if (++factories === 1) throw new Error("bad factory");
+					return { variant: "only", members: { ping: async () => null } };
+				}),
+			);
+			const one = client.hold(Flaky, {}, context);
+			const two = client.hold(Flaky, {}, context);
+			await transported();
+			const states: string[] = [];
+			const watch = await one.state.watch(context);
+			states.push(watch.value.kind);
+			watch.start(async (call) => {
+				if (call.kind === "value") states.push(call.value.kind);
+			});
+			one.retry();
+			// A call made while it loads again waits for the binding; none sees the old failure.
+			let called: Promise<string> | undefined;
+			const unwatch = await one.state.watch(context);
+			unwatch.start(async (call) => {
+				if (call.kind === "value" && call.value.kind === "loading" && called === undefined) {
+					called = one.ping(context).then(
+						() => "ok",
+						(error: Error) => `rejected: ${error.message}`,
+					);
+				}
+			});
+			await transported();
+			await transported();
+			expect(states).toEqual(["failed", "loading", "live"]);
+			expect(await called).toBe("ok");
+			expect(two.state.value).toEqual({ kind: "live" });
+			expect(factories).toBe(2);
+		});
+
 		it("a drop while failed: loading, held again on the next link (race 19)", async () => {
 			const { client, peer } = await rawProvider();
 			const notes = client.hold(Notes, { session: "S1" }, context);
@@ -692,7 +743,7 @@ forEachCodec(() => {
 		});
 	});
 
-	describe("an activating dependent whose remote dependency's link drops (race 18)", () => {
+	describe("an activating dependent whose remote dependency's link drops (audit; supersedes race 18)", () => {
 		fakeTimers();
 
 		const View = local("app.view", { version: 1, params: {}, members: { count: int() } });
@@ -709,27 +760,36 @@ forEachCodec(() => {
 			expect((await client.get(View, {}, context, { readyTimeout: 1 })).count.value).toBe(1);
 		}
 
-		it("fails transiently at once with the drop, keeps the reference, and is retried at once when it is bound", async () => {
+		it("stays loading through the drop, no failure reported, and goes live when the next link binds it", async () => {
 			const errors: HostError[] = [];
 			const client = createHost<TestPrincipal>({ onError: (error) => errors.push(error) });
 			const peer = await rawParent(client);
 			const loading = client.load([{ name: "@test/view", facet }], context);
 			await peer.next("hold");
 			peer.close();
+			await transported();
+			const view = client.hold(View, {}, context);
+			expect(view.state.value).toEqual({ kind: "loading" });
+			const next = await rawParent(client);
+			expect(await bindNext(next, [{ text: "a" }])).toBe(0);
 			await loading;
-			expect(errors).toMatchObject([
-				{
-					kind: "activation_failed",
-					failure: {
-						kind: "transient",
-						error: {
-							message: "app.view: dependency app.notes(S1) failed",
-							cause: { message: "the link closed" },
-						},
-					},
-				},
-			]);
-			await retried(client, await rawParent(client));
+			await transported();
+			expect(view.state.value).toEqual({ kind: "live" });
+			expect(errors).toEqual([]);
+		});
+
+		it("dropped and never bound again, fails transient at its readyTimeout (the bound of the wait)", async () => {
+			const errors: HostError[] = [];
+			const client = createHost<TestPrincipal>({ readyTimeout: 1_000, onError: (error) => errors.push(error) });
+			const peer = await rawParent(client);
+			const loading = client.load([{ name: "@test/view", facet }], context);
+			await peer.next("hold");
+			peer.close();
+			await transported();
+			expect(errors).toEqual([]);
+			await vi.advanceTimersByTimeAsync(1_000);
+			await loading;
+			expect(failures(errors)).toEqual(["app.view: transient"]);
 		});
 
 		it("without any link fails at its readyTimeout, keeps the reference, and is retried when the first link binds it", async () => {

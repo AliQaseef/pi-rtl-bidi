@@ -694,6 +694,16 @@ describe("acquiring: hold and get", () => {
 		expect(await refused).toEqual(error);
 	});
 
+	it("invalid params before load resolved: hold throws and get rejects invalid/params at once (audit, 7a)", async () => {
+		const host = createHost(noErrors);
+		expect(() => host.hold(Page, { id: "x" } as never, context)).toThrow("params");
+		expect(await rejection(host.get(Page, { id: "x" } as never, context))).toMatchObject({
+			code: "invalid",
+			reason: "params",
+		});
+		await host.load([], context);
+	});
+
 	it("a hold released before load resolved makes nothing once it did", async () => {
 		const factory = vi.fn(({ id }: { id: number }) => ({ id: constant(id) }));
 		const host = createHost(noErrors);
@@ -805,10 +815,10 @@ forEachCodec(() => {
 		}
 
 		/** Sends a hold of `PlacedNotes` (or `type`) for `session`, naming `address` when given. */
-		function holdOf(peer: RawPeer, session: string, address?: string, type: string = PlacedNotes.name) {
+		function holdOf(peer: RawPeer, session: string, address?: string, type: string = PlacedNotes.name, hold = 0) {
 			peer.send({
 				kind: "hold",
-				hold: 0,
+				hold,
 				type,
 				version: PlacedNotes.version,
 				fingerprint: PlacedNotes.fingerprint,
@@ -836,9 +846,10 @@ forEachCodec(() => {
 				hold: 0,
 				cause: { kind: "broken", error: { kind: "chord", error: misplaced } },
 			});
-			holdOf(child, "S2");
+			// A refused hold is kept (a retry starts it again): the next hold takes the next id.
+			holdOf(child, "S2", undefined, PlacedNotes.name, 1);
 			expect(await child.next("failed")).toMatchObject({
-				hold: 0,
+				hold: 1,
 				cause: { kind: "broken", error: { kind: "chord", error: misplaced } },
 			});
 		});

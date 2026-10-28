@@ -408,9 +408,10 @@ export class Attempt implements StoreSelf, KeyDeclarer {
 		const checked = checkArgs(served.provider, method, args, served.contract.version, context);
 		const linked = withLinkedAbortSignal(this.#abort.signal, context);
 		const callContext = linked.context;
-		// A local object's handlers act as the host; a remote one's as their caller.
-		const principal = served.kind === "remote" ? caller.principal : host.principal;
-		const ctx = new CallContext(callContext, { principal, incarnation: caller.incarnation }, host);
+		// A local object's handlers act as the host, its principal and its incarnation (§4); a remote one's as their
+		// caller. The caller stays the reference's (presence, §19).
+		const acting = served.kind === "remote" ? caller : { principal: host.principal, incarnation: host.incarnation };
+		const ctx = new CallContext(callContext, acting, host);
 		// Admitted to the drain before the handler runs: the handler may end its own object before it returns.
 		const running = Promise.withResolvers<unknown>();
 		host.count("calls", 1);

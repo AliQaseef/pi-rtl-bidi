@@ -72,6 +72,8 @@ type HoldState =
 			/** The members it follows, in the order they were subscribed. */
 			readonly followed: Followed[];
 	  }
+	/** Refused where it arrived (placement, `authorize`, a mismatch, invalid params, a cycle): `retry` starts it again. */
+	| { readonly kind: "refused"; readonly request: HoldRequest }
 	| { readonly kind: "released" };
 
 /** A bound hold's state. */
@@ -84,8 +86,8 @@ const BINDING: HoldState = { kind: "binding" };
 /**
  * One hold served here: a reference to its object acting as its caller (the hold's principal). While pending, each
  * failure of its object is sent as `failed` (with the rest of its backoff window) and the next attempt as `loading`; a
- * hold that cannot be taken (a refused type, a mismatch, invalid params or placement) is a broken `failed` that ends
- * it. Once live it binds when its link's window has a slot, then sends a part per batch that changed its members
+ * hold that cannot be taken (a refused type, a mismatch, invalid params or placement) is a broken `failed` that holds
+ * nothing until a `retry` starts it again. Once live it binds when its link's window has a slot, then sends a part per batch that changed its members
  * (or keeps their ops pending while the window is full), and `gone` when its object ends.
  */
 export class Hold implements Holder {
@@ -137,7 +139,7 @@ export class Hold implements Holder {
 	 * Admits the hold once `load` resolved: its params within the link's part limit (`too_large/part`), then relayed
 	 * (it is replaced by a relayed hold), or served here, its params opened and parsed (a malformed part is a protocol
 	 * error), its object taken and followed (`moved`). A hold that cannot go anywhere, a type that does not match,
-	 * invalid params, a wrong placement or a cycle (Q5) is a broken `failed`, which ends it.
+	 * invalid params, a wrong placement or a cycle (Q5) is a broken `failed`; the hold is kept, refused, for a `retry`.
 	 */
 	async start(request: HoldRequest): Promise<void> {
 		const { link } = this.#provider;
@@ -169,7 +171,7 @@ export class Hold implements Holder {
 			}
 			object = link.host.serving(request, params, this.caller.principal!, link.context);
 		} catch (error) {
-			return this.#refuse(asChordError(error, request.type));
+			return this.#refuse(request, asChordError(error, request.type));
 		}
 		// Counted before the object lists it in its presence: a derive over that may close this link synchronously.
 		this.#object = object;
@@ -203,9 +205,19 @@ export class Hold implements Holder {
 		}
 	}
 
-	/** A `retry` message: the object is asked for an attempt now (it ignores this unless failed). */
+	/**
+	 * A `retry` message: the object is asked for an attempt now (it ignores this unless failed); a refused hold is
+	 * started again (a route's `authorize` may admit it now, a type may be served here now).
+	 */
 	retry(): void {
-		this.#object?.retry();
+		const state = this.#state;
+		if (state.kind !== "refused") {
+			this.#object?.retry();
+			return;
+		}
+		this.#state = PENDING;
+		this.#provider.send({ kind: "loading", hold: this.id });
+		void this.start(state.request);
 	}
 
 	/** Calls a method of the held object as the hold's caller. */
@@ -413,11 +425,13 @@ export class Hold implements Holder {
 		this.#provider.touched(this);
 	}
 
-	/** Refuses the hold: a broken `failed`, final; the provider forgets it. */
-	#refuse(error: ChordError): void {
-		this.#provider.forget(this);
+	/** Refuses the hold: a broken `failed`; it keeps `request` for a `retry`, holding nothing until then. */
+	#refuse(request: HoldRequest, error: ChordError): void {
+		const { params } = request;
+		// Its params owned, not a view of the message they came in (which the link's buffers may hold).
+		const owned = typeof params === "string" ? params : (params as Uint8Array).slice();
+		this.#state = { kind: "refused", request: { ...request, params: owned } };
 		this.#provider.send({ kind: "failed", hold: this.id, cause: { kind: "broken", error: wireError(error) } });
-		this.release();
 	}
 }
 

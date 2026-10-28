@@ -125,6 +125,8 @@ export class ChordObject implements Target {
 	readonly #holders = new Set<Holder>();
 	/** Objects this object's activation waits for; followed to find cycles (Q5). */
 	readonly #waitingFor = new Set<Target>();
+	/** The attempt a dependency went live during (R18): if it fails on a dependency, it is retried at once. */
+	#woken: Attempt | undefined;
 	/** The current attempt's outcome: resolves when it goes live, rejects with its error; renewed by every retry. */
 	#outcome = settlement();
 	/** The error of the last failed attempt, until one goes live. */
@@ -474,9 +476,17 @@ export class ChordObject implements Target {
 		}
 	}
 
-	/** A dependency went live: retried at once (backoff window skipped) when it failed on a dependency (R18). */
+	/**
+	 * A dependency went live: retried at once (backoff window skipped) when it failed on a dependency (R18). A wake
+	 * while it activates is remembered: that activation may still fail on the dependency's earlier failure.
+	 */
 	dependencyLive(): void {
-		if (this.#state.kind !== "failed" || this.#state.holding === undefined) return;
+		const state = this.#state;
+		if (state.kind === "activating") {
+			this.#woken = state.attempt;
+			return;
+		}
+		if (state.kind !== "failed" || state.holding === undefined) return;
 		this.host.backoff.skip(this.identity);
 		this.attempt();
 	}
@@ -519,6 +529,7 @@ export class ChordObject implements Target {
 	}
 
 	#wentLive(attempt: Attempt): void {
+		this.#woken = undefined;
 		this.#state = { kind: "live", attempt };
 		this.#exposed = attempt;
 		if (this.#members.size > 0 || !this.#keys.empty)
@@ -538,6 +549,8 @@ export class ChordObject implements Target {
 	 * broken: no automatic retry.
 	 */
 	#failed(attempt: Attempt, cause: FailureCause, holding: Attempt | undefined): void {
+		const woken = this.#woken === attempt;
+		this.#woken = undefined;
 		// What its activation loaded for the pinned keys goes; they stay frozen.
 		this.#keys.discard();
 		if (cause.kind === "transient") this.host.backoff.failed(this.identity);
@@ -546,9 +559,10 @@ export class ChordObject implements Target {
 		this.#state = { kind: "failed", failure, holding };
 		this.#lastFailure = cause.error;
 		attempt.seal(this.ended());
-		if (holding === undefined) attempt.releaseReferences();
 		const closing = attempt.close(END).then((failures) => {
 			attempt.detach();
+			// Released once its natives closed (a close may use them, §6, §13); R18's attempt keeps them for the retry.
+			if (holding === undefined) attempt.releaseReferences();
 			return failures;
 		});
 		this.host.ending(this.identity, this.#reported(closing));
@@ -557,6 +571,8 @@ export class ChordObject implements Target {
 		this.#notify();
 		// Job runs kept it while it activated; failed, they keep it no longer.
 		this.#idle();
+		// A dependency went live while this attempt activated: the wake it missed retries it now (R18).
+		if (holding !== undefined && woken) this.dependencyLive();
 	}
 
 	/** The member source of `member`, made bound to `exposed`'s member by its first use. */

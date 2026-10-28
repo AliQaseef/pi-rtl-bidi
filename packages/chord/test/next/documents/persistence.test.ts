@@ -167,7 +167,10 @@ describe("loads", () => {
 				},
 				undefined,
 			);
-		expect(await notes.find("a", context)).toMatchObject({ revision: 1, version: 1 });
+		expect(await notes.find("a", context)).toMatchObject({
+			stored: { revision: 1, version: 1 },
+			fingerprint: expect.any(String),
+		});
 		expect(await notes.keys(undefined, 10, context)).toEqual(["a", "b", "\uFFFF", "\u{1F600}"]);
 		expect(await notes.keys("b", 1, context)).toEqual(["\uFFFF"]);
 	});

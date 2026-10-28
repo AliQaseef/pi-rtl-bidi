@@ -56,6 +56,40 @@ forEachCodec(() => {
 			expect((await owner.tab.get(PlacedNotes, { session: "S2" }, context)).variant).toBe("editor");
 		});
 
+		it("ref.retry() holds a refused hold again: authorize admitting it later, over a link and on this host (audit)", async () => {
+			let admit = false;
+			const { tab, server } = await relayed({ authorize: () => admit });
+			const overLink = tab.hold(PlacedNotes, { session: "S1" }, context);
+			const here = server.hold(PlacedNotes, { session: "S2" }, context);
+			await transported();
+			for (const ref of [overLink, here]) {
+				expect(ref.state.value).toMatchObject({
+					kind: "failed",
+					cause: { kind: "broken", error: { code: "forbidden" } },
+				});
+			}
+			admit = true;
+			overLink.retry();
+			here.retry();
+			await transported();
+			expect(overLink.state.value).toEqual({ kind: "live" });
+			expect(here.state.value).toEqual({ kind: "live" });
+		});
+
+		it("ref.retry() of a reference refused on this host after host.close ends it released, nothing resolved (audit)", async () => {
+			let admit = false;
+			const { server, resolves } = await relayed({ authorize: () => admit });
+			const ref = server.hold(PlacedNotes, { session: "S1" }, context);
+			await transported();
+			expect(ref.state.value).toMatchObject({ kind: "failed", cause: { error: { code: "forbidden" } } });
+			await server.close(context);
+			admit = true;
+			ref.retry();
+			await transported();
+			expect(ref.state.value).toMatchObject({ kind: "ended", error: { code: "released", reason: "closed" } });
+			expect(resolves).toEqual([]);
+		});
+
 		it("fails a hold broken with what authorize throws", async () => {
 			const { tab } = await relayed({
 				authorize: () => {

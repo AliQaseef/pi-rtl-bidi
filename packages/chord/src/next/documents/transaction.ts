@@ -4,6 +4,7 @@
 import { type Context, withoutAbortSignal } from "../../context/index.ts";
 import { type Change, type Draft, type Prepared, type Tracker, track } from "../../delta/index.ts";
 import { ChordError } from "../data/index.ts";
+import { asChordError } from "../data/internal.ts";
 import type { JobHandle, Outcome, Run, StartOptions } from "../jobs/index.ts";
 import type { Job } from "../jobs/internal.ts";
 import type { Columns, PutRowOf, RowOf } from "../store/columns.ts";
@@ -20,8 +21,8 @@ import type { Documents } from "./documents.ts";
 import type { SealToken } from "./fence.ts";
 import type { Keyed, KeyedHandle, Singleton, SingletonHandle } from "./handles.ts";
 import type { KeyedSlot } from "./keyed-slot.ts";
-import type { Stored, StoredChange } from "./persistence.ts";
-import type { DocumentSlot, SingletonSlot } from "./slot.ts";
+import { checkReadable, type FoundDocument, type Stored, type StoredChange } from "./persistence.ts";
+import type { DocumentSlot, PersistedSlot, SingletonSlot } from "./slot.ts";
 
 /** What `self.tx` gives its callback. Inside it: only `await tx.*`, no other `self.tx`, no calls to other objects. */
 export interface Tx {
@@ -213,9 +214,14 @@ export class Transaction implements Tx {
 		const at = key === "" ? key : slot.key(key);
 		const entry = this.retireSlot(slot, at);
 		const persisted = slot.persisted;
-		// A cold persisted document is found, not loaded (one read; absent: a no-op, R13).
+		// A cold persisted document is found, not loaded (one read; absent: a no-op, R13); a version or fingerprint
+		// the code cannot read fails the owner as a load would (R15): a retirement of it is no exception.
 		if (entry.found === undefined && persisted?.cold(at)) {
-			entry.found = await this.#track(persisted.persistence.find(at, this.#context));
+			const found = await this.#track(persisted.persistence.find(at, this.#context));
+			// Cut meanwhile: its attempt was sealed, and failing the owner now would fail its successor.
+			this.#assertOpen();
+			if (found !== undefined) checkFound(found, persisted, slot);
+			entry.found = found?.stored;
 		}
 	}
 
@@ -531,5 +537,16 @@ export class Transaction implements Tx {
 			entry.draft = { tracker, change: tracker.beginChange() };
 		}
 		return entry.draft.change.state;
+	}
+}
+
+/** Throws, failing `slot`'s owner `broken`, when its definition cannot read the cold document `found` (R15). */
+function checkFound(found: FoundDocument, persisted: PersistedSlot, slot: DocumentSlot): void {
+	try {
+		checkReadable({ version: found.stored.version, fingerprint: found.fingerprint }, persisted.definition.current);
+	} catch (error) {
+		const failure = asChordError(error, slot.owner.label);
+		slot.owner.fail(failure);
+		throw failure;
 	}
 }

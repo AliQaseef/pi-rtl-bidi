@@ -51,15 +51,15 @@ export class Placement {
 
 	/**
 	 * Where a hold arriving on `link` acting as `principal` goes: here when its type is served here; over the route of
-	 * the address it names; else over the parent link, unless it came on the parent link or there is none
-	 * (`unavailable`). Throws as `reference` does.
+	 * the address it names; else over the parent link (waiting for it while it is down), unless it came on the parent
+	 * link or this host never had one (`unavailable`). Throws as `reference` does.
 	 */
 	hold(request: HoldRequest, link: HostLink, principal: Principal | undefined, context: Context): Placed {
 		if (this.#types.has(request.type)) return HERE;
 		const { address } = request;
 		const routed = this.#pathTo(address, principal, context);
 		if (routed !== undefined) return { kind: "path", path: routed, address };
-		if (link.role === "parent" || this.#parent.link === undefined) {
+		if (link.role === "parent" || !this.#parent.linked) {
 			throw new ChordError({ code: "unavailable", message: `${request.type} is not served here` });
 		}
 		return { kind: "path", path: this.#parent, address };

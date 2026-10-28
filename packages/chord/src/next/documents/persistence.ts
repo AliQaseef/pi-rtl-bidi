@@ -29,6 +29,9 @@ export type Stored = {
 	readonly deltasSinceBase: number;
 };
 
+/** A live document found without loading it: what is stored of it and the fingerprint it was stored with. */
+export type FoundDocument = { readonly stored: Stored; readonly fingerprint: string };
+
 /** A loaded document: its value at the definition's version, and what is stored of it. */
 export type Loaded = { readonly value: JsonObject; readonly stored: Stored };
 
@@ -84,28 +87,27 @@ export class Persistence {
 	 */
 	decode(document: StoredDocument, definition: AnyDefinition, context: Context): Loaded {
 		const { record, deltasSinceBase } = document;
-		const { name, version, fingerprint } = definition;
-		if (record.version > version) {
-			throw new Error(`${name}: stored at version ${record.version}, newer than the code's ${version}`);
-		}
-		if (record.version === version && record.fingerprint !== fingerprint) {
-			throw new Error(`${name}: stored with another schema at version ${version} (a schema changed without a bump)`);
-		}
+		checkReadable(record, definition);
 		// The engine stores what commits gave it: JSON objects of the record's version.
 		const stored = document.value as JsonObject;
-		const value = record.version === version ? stored : definition.migrate(stored, record.version, context);
+		const value =
+			record.version === definition.version ? stored : definition.migrate(stored, record.version, context);
 		return {
 			value,
 			stored: { id: record.id, revision: record.revision, version: record.version, deltasSinceBase },
 		};
 	}
 
-	/** What is stored of the live document at `key` without loading it (a retirement's find), `undefined` when absent. */
-	async find(key: string, context: Context): Promise<Stored | undefined> {
+	/**
+	 * What is stored of the live document at `key` without loading it (a retirement's find) and the schema fingerprint
+	 * it was stored with (`checkReadable` takes both), `undefined` when absent.
+	 */
+	async find(key: string, context: Context): Promise<FoundDocument | undefined> {
 		const record = await this.store.read((executor) => findDocument(executor, this.at(key)), context);
 		if (record === undefined) return undefined;
 		// The change counter is all a retirement needs; `deltasSinceBase` is not read for one.
-		return { id: record.id, revision: record.revision, version: record.version, deltasSinceBase: 0 };
+		const stored = { id: record.id, revision: record.revision, version: record.version, deltasSinceBase: 0 };
+		return { stored, fingerprint: record.fingerprint };
 	}
 
 	/** Up to `limit` keys of live documents after `after`, in code point order. */
@@ -158,6 +160,23 @@ export class Persistence {
 	/** The address of `key`: a singleton's (`""`) has no key. */
 	at(key: string): DocumentAddress {
 		return key === "" ? this.#address : { ...this.#address, key };
+	}
+}
+
+/**
+ * Throws when `definition` cannot read a document stored at `stored`'s version and fingerprint: a newer version than
+ * the code's, or the same version with another fingerprint (D9). A load and a retirement check alike (R15).
+ */
+export function checkReadable(
+	stored: { readonly version: number; readonly fingerprint: string },
+	definition: AnyDefinition,
+): void {
+	const { name, version, fingerprint } = definition;
+	if (stored.version > version) {
+		throw new Error(`${name}: stored at version ${stored.version}, newer than the code's ${version}`);
+	}
+	if (stored.version === version && stored.fingerprint !== fingerprint) {
+		throw new Error(`${name}: stored with another schema at version ${version} (a schema changed without a bump)`);
 	}
 }
 

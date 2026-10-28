@@ -311,6 +311,30 @@ describe("dependency recovery (R18)", () => {
 		]);
 	});
 
+	it("remembers a dependency going live while the dependent activates: the dependent is retried at once (audit)", async () => {
+		const viewer = view(Core);
+		let cores = 0;
+		const { host } = await loaded((h) => {
+			// Its first factory throws (broken); the second goes live at once, without natives.
+			h.serve(Core, () => {
+				if (++cores === 1) throw new Error("first factory");
+				return { n: constant(2) };
+			});
+			h.serve(View, viewer.factory);
+		});
+		await flushed();
+		// The view activates on the core's failure while the core is retried and goes live at once.
+		const dependency = host.hold(Core, {}, context);
+		const dependent = host.hold(View, { id: 1 }, context);
+		dependency.retry();
+		await flushed();
+		expect(dependency.state.value).toEqual({ kind: "live" });
+		expect(dependent.state.value).toEqual({ kind: "live" });
+		expect(viewer.times).toEqual([0, 0]);
+		dependent.release();
+		dependency.release();
+	});
+
 	it("ignores a trigger while an attempt runs: simultaneous triggers give one attempt", async () => {
 		const gate = Promise.withResolvers<void>();
 		const svc = flaky((attempt) => attempt === 1, gate.promise);
@@ -888,6 +912,41 @@ function nearHold(hold: number): Extract<Message, { kind: "hold" }> {
 	const { name: type, version, fingerprint } = Near;
 	return { kind: "hold", hold, type, version, fingerprint, params: jsonPart({ session: "S1" }) };
 }
+
+describe("a failed activation's cleanup (audit)", () => {
+	it("closes the natives that opened before it releases its references: a close may use them", async () => {
+		const Dependent = local("app.dependent", { version: 1, params: { id: int() }, members: { n: int() } });
+		const seen: unknown[] = [];
+		const { host, errors } = await loaded((h) => {
+			h.serve(Core, () => ({ n: constant(5) }));
+			h.serve(Dependent, (_, self) => {
+				const core = self.get(Core, {});
+				self.open(
+					async () => null,
+					() => {
+						try {
+							seen.push(core.n.value);
+						} catch (error) {
+							seen.push(String(error));
+						}
+					},
+				);
+				self.open(
+					async () => {
+						throw broken(new Error("open failed"));
+					},
+					() => {},
+				);
+				return { n: core.n };
+			});
+		});
+		await expect(host.get(Dependent, { id: 1 }, context)).rejects.toThrow("open failed");
+		await flushed();
+		expect(errors.find(({ kind }) => kind === "activation_failed")).toMatchObject({ failure: { kind: "broken" } });
+		expect(seen).toEqual([5]);
+		await host.close(context);
+	});
+});
 
 describe("a live object failing (slice 6a §1.4)", () => {
 	it("fails broken: calls reject with the cause, one object_failed report, natives close, then references go", async () => {

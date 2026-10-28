@@ -123,7 +123,7 @@ type BindingState =
 			readonly dependent: ChordObject | undefined;
 			readonly target: Target;
 	  }
-	| { readonly kind: "refused"; readonly batch: Batch; readonly failure: Failed }
+	| { readonly kind: "refused"; readonly batch: Batch; readonly failure: Failed; readonly bind: () => void }
 	| { readonly kind: "released"; readonly state: Ended };
 
 /** What a wait for a state decides at each change. */
@@ -240,11 +240,15 @@ export class Binding implements Holder {
 		this.moved();
 	}
 
-	/** A `host.hold` that cannot be bound once `load` resolved: failed with `cause`, which no retry changes. */
-	refuse(cause: FailureCause): void {
+	/**
+	 * A `host.hold` that cannot be bound (where it goes refused it): failed with `cause` until `ref.retry()` runs `bind`
+	 * again (a route's `authorize` may admit it later).
+	 */
+	refuse(cause: FailureCause, bind: () => void): void {
 		const state = this.#state;
 		if (state.kind !== "unbound") return;
-		this.#state = { kind: "refused", batch: state.batch, failure: { kind: "failed", cause, retryAt: undefined } };
+		const failure: Failed = { kind: "failed", cause, retryAt: undefined };
+		this.#state = { kind: "refused", batch: state.batch, failure, bind };
 		this.moved();
 	}
 
@@ -388,9 +392,17 @@ export class Binding implements Holder {
 		return this.#ended.promise;
 	}
 
-	/** `ref.retry()`: the object is asked for an attempt now; it ignores this unless failed. */
+	/** `ref.retry()`: the object is asked for an attempt now (ignored unless failed); a refused hold is bound again. */
 	retry(): void {
-		if (this.#state.kind === "bound") this.#state.target.retry();
+		const state = this.#state;
+		if (state.kind === "bound") {
+			state.target.retry();
+			return;
+		}
+		if (state.kind !== "refused") return;
+		this.#state = { kind: "unbound", batch: state.batch, dependent: undefined };
+		this.moved();
+		state.bind();
 	}
 
 	/** Releases the reference (idempotent); the object may end when it was its last. */

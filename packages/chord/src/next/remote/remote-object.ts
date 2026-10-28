@@ -153,10 +153,10 @@ export class RemoteObject implements Target {
 		this.#hold = { side: link.consumer, id: link.consumer.attach(this, chain) };
 	}
 
-	/** The link dropped with `error`: loading until a new link's hold is bound (`#startOver`). */
-	dropped(error: ChordError): void {
+	/** The link dropped: loading until a new link's hold is bound (`#startOver`). */
+	dropped(_error: ChordError): void {
 		this.#hold = undefined;
-		this.#startOver(error);
+		this.#startOver();
 	}
 
 	/**
@@ -214,16 +214,21 @@ export class RemoteObject implements Target {
 	}
 
 	/**
-	 * `ref.retry()`: a failed object's provider is asked for an attempt; one that failed for a part past the link's
-	 * limits is placed anew and held with a new id, now or on its path's next link (a placement that throws fails it
-	 * broken again); ignored otherwise and without a link.
+	 * `ref.retry()`: a failed object's provider is asked for an attempt (a hold it refused is started there again). One
+	 * that failed for a part past the link's limits is placed anew and held with a new id, now or on its path's next
+	 * link (a placement that throws fails it broken again).
 	 */
 	retry(): void {
 		if (this.#state.kind !== "failed") return;
-		if (this.#path !== this.#host.unplaced) {
-			this.#hold?.side.retry(this.#hold.id);
+		if (this.#path === this.#host.unplaced) {
+			this.#place();
 			return;
 		}
+		this.#hold?.side.retry(this.#hold.id);
+	}
+
+	/** Places a reference whose part was past the limits anew, on its path now (a placement that throws fails it). */
+	#place(): void {
 		let path: Path;
 		try {
 			path = this.#host.pathOf(this.contract, this.#params, this.caller.principal);
@@ -334,9 +339,7 @@ export class RemoteObject implements Target {
 	 * (`#startOver`).
 	 */
 	loading(): void {
-		this.#startOver(
-			new ChordError({ code: "unavailable", message: `${this.label}: its relay's upstream link dropped` }),
-		);
+		this.#startOver();
 	}
 
 	/**
@@ -402,18 +405,13 @@ export class RemoteObject implements Target {
 	}
 
 	/**
-	 * Loading again until the next binding; the members keep their last values. A dependent's activation waiting for
-	 * this hold while it was loading already fails at once with `error` (transient) and is retried when a new hold is
-	 * bound (R18).
+	 * Loading again until the next binding; the members keep their last values. A drop while it is loading already
+	 * changes nothing: a dependent's activation waiting for it goes on waiting for the next link's binding, bounded by
+	 * its `readyTimeout` (§6, R18; a drop is not a dependency failure).
 	 */
-	#startOver(error: ChordError): void {
-		if (this.#state.kind === "ended") return;
-		if (this.#state === LOADING) {
-			this.#settled.reject(error);
-			this.#settled = settlement();
-		} else {
-			this.#move(LOADING);
-		}
+	#startOver(): void {
+		const { kind } = this.#state;
+		if (kind !== "ended" && kind !== "loading") this.#move(LOADING);
 	}
 
 	/** Moves to `state` and tells the reference; `settled` follows (a new wait each time it is loading again). */

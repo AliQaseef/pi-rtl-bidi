@@ -69,8 +69,8 @@ export class PersistedRuns {
 
 	/** Finds what is stored of run `id`'s state document (a run of another job version), keeping it for the drop. */
 	async findBlockedState(id: string, context: Context): Promise<void> {
-		const stored = await this.#states.find(id, context);
-		if (stored !== undefined) this.#blockedStates.set(id, stored);
+		const found = await this.#states.find(id, context);
+		if (found !== undefined) this.#blockedStates.set(id, found.stored);
 	}
 
 	/** Every stored record of the job, in run id order, page by page with plain reads (activation holds the line). */
