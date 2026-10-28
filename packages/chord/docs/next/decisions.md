@@ -1637,7 +1637,8 @@ validation and copies the v2 kernel added around Delta.
   purpose of this slice"):** `StoreStorage` declares conversations, entries, tasks, submissions and `record_ids` as
   `defineTable`s, writes them with `put` (Durable replaces complete records), and reads them with the store's queries;
   the outbox, export, import, the applier and later `evolveTable` versions handle them as every table. The partial
-  head index becomes an index on `(conversation_id, has_head, id)`; indexed strings that must stay lossless keep
+  head index becomes a table `entry_heads` (one row per entry with a head; build, 2026-10-27, faster than an index on
+  `(conversation_id, has_head, id)`); indexed strings that must stay lossless keep
   Durable's JSON encoding.
 - **Slice 6b D3: one id counter per store (owner, 2026-10-27: "a"):** the store's counter (`next_document_id`, renamed
   `next_id`; the archive manifest's `nextDocumentId` becomes `nextId`) numbers every id in the store: Durable's

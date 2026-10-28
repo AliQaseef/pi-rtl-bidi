@@ -174,13 +174,16 @@ app owns it).
 Every row carries the record's indexed columns and the whole record as `json(unknown(), { version: 1 })`; indexed
 strings that must stay lossless (`kind`, `request_id`) hold Durable's JSON encoding; index columns are non-`opt`, so
 absent values take sentinels that no encoded value can be (`0` for an absent owner id, ids start at 2; `""` for an
-absent request id, JSON-encoded strings start with `"`).
+absent request id, JSON-encoded strings start with `"`). SQLite's partial head index is the table `entry_heads`
+(builder, 2026-10-27: an index on `(conversation_id, has_head, id)` cost about 5.5 µs per commit; the table is written
+only for entries with a head and is faster on both paths).
 
 | Table | Key | Columns | Indexes |
 | --- | --- | --- | --- |
 | `record_ids` | `id` | `record_type str` | |
 | `conversations` | `id` | `owner_conversation_id int`, `owner_task_id int`, `record` | `(owner_conversation_id, id)`, `(owner_task_id, id)` |
-| `entries` | `id` | `conversation_id int`, `has_head int` (0/1), `commit_seq int` (stamped), `record` | `(conversation_id, id)`, `(conversation_id, has_head, id)` |
+| `entries` | `id` | `conversation_id int`, `commit_seq int` (stamped), `record` | `(conversation_id, id)` |
+| `entry_heads` | `id` | `conversation_id int` (one row per entry with a `head`, written with it) | `(conversation_id, id)` |
 | `tasks` | `id` | `conversation_id int`, `kind str`, `status str`, `abort_requested int`, `background int`, `record` | `(status, id)`, `(conversation_id, id)`, `(kind, id)`, `(abort_requested, id)`, `(background, id)` |
 | `submissions` | `id` | `conversation_id int`, `request_id str`, `status str`, `record` | `(conversation_id, request_id)`, `(conversation_id, id)`, `(status, id)` |
 
