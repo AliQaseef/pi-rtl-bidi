@@ -1,6 +1,8 @@
 # Slice 8: registries and `host.root` (spec)
 
-Status: **decided, ready for the spec reviews** (2026-10-27; D1-D3 and the registry failures decided by the owner), written by the redesign session. Built in
+Status: **revised after the spec review** (2026-10-27; D1-D3, the registry failures, S1-S3 decided by the owner; the
+four reviews `/tmp/s8-review-{astra,fable,opus,sol}.md` and a check against the design's rules found `self.registry`
+wrongly specified as a plain read: it is a declared dependency, as `self.get`), written by the redesign session. Built in
 parallel with 6b (mostly new files). The single source for building 8, together with `design.md` (§7, §8, §11, §16,
 §17, §18, §24 read in full), the decision log `decisions.md` (R21, R23, R25, Q8, D1 of "Review round 1", "Registries
 work like Durable's", "Changing contributions, `self.writable`", W4, "Failures are watch calls", "Slice 8 is
@@ -60,20 +62,37 @@ await host.root(async (ctx) => (await ctx.get(Notes, { session })).add(note, ctx
   order); a contribution carries its token's version: an older one is adapted once with the declaration's `accepts`
   when the table is built, an older one without an adapter or a newer one is left out and reported (`HostError`
   `contribution_refused { registry, plugin, version }`).
-- **`compose(table, { report })`:** pure, runs whenever the table changes (a contributor goes live or ends, a
-  contribution that is a watchable changes), in the owner's flush, never inside another owner's commit step (W4);
-  `report(conflict)` goes to `onError` as `registry_conflict { registry, message, plugins }`.
+- **Contributions:** a plain value, or a Chord watchable (a `writable`, a derive, a document member, another
+  registry's value), followed as a dependent of the table (its change recomposes); a foreign watchable (a Durable watch)
+  is refused at `contribute` (declaration policy). The table's entry is `{ plugin, type?, version, value }` (`type` for
+  an object contributor; served types carry their plugin's name).
+- **`compose(table, { report })`:** pure, lazy as a derive: the registry's value is marked when its table changes (a
+  contributor goes live or ends, a watchable contribution changes) and composed when read or, while watched, in the
+  owner's flush (W4: never by another owner's adoption itself; the flush after a commit step is where it runs). The first
+  composition happens at the serve: the facets' setups of one `load` serve and contribute, then every served registry
+  composes once in one batch at the end of the setups (an empty table composes too), so a served registry always has
+  a value before any object activates. `report(conflict)` goes to `onError` as `registry_conflict { registry, message,
+  plugins }`, once per conflict episode.
 - **Failures (owner, 2026-10-27):** contributions never fail the registry. A contribution that is a watchable and fails
   is left out of the table and reported (`contribution_failed { registry, plugin, error }`), the table recomposes without
   it, and it is back once it heals. A `compose` that throws (the owner's bug) is reported (`registry_failed { registry,
   error }`), the composed value's watches get a `failed` call, and `.value` keeps the last good composition (an extension
   point stays available; derives keep their own rule, `.value` throwing while failed); the next good composition
   replaces it. Before any good composition `.value` throws the error.
-- **Without a provider** (the defining plugin is not loaded): the composed value is failed with
-  `unavailable/undeclared` (readers see the error as from a failed reference); contributions wait in the table; its
-  serve heals it.
-- **Reading:** `self.registry(R)` in any object's factory returns a `NativeWatchable<V>` (a derive source, an `on`
-  source, a `retryOn` source); methods and routines read `.value` at use; `host.registry(R)` for code outside objects.
+- **Without a provider** (the defining plugin is not loaded): the registry has no value; contributions wait in the
+  table; its serve composes it.
+- **Reading is a dependency (S3, owner, 2026-10-27: "isn't self.registry meant to wait like self.get?"):**
+  `self.registry(R)` in a factory declares the registry as a dependency of the attempt, as `self.get`: activation waits
+  until it has a value (bounded by `readyTimeout`); without one in time the object fails `transient` with
+  `unavailable/undeclared` as the dependency's cause and is retried the moment the registry gets its first value
+  (R18). It returns a `RegistryValue<V>` (a native source: a derive source, an `on` source, a `retryOn` source; never a
+  state member); methods and routines read `.value` at use. Once the object is live, a later failure of the registry
+  (a throwing `compose`) changes nothing for it: `.value` keeps the last good composition. Code outside objects:
+  `await host.registry(R, ctx)` waits the same way.
+- **Older readers (S2, owner, 2026-10-27):** a reader whose bundled token has an older version than the provider's gets
+  the composed value mapped back with `accepts[old].value` (computed once per composition and version, while such a
+  reader exists); without that mapping, or for a reader newer than the provider, its dependency fails
+  `contract_mismatch` (reported). `accepts: { [old]: { contribution?: (old) => current, value?: (current) => old } }`.
 - **Helpers:** `keyed(table, entriesOf)` (a map, a duplicate key reported, the first by plugin name wins) and
   `ordered(table, itemsOf, orderOf?)`.
 - **Use sites guard contributions** (Q8): Chord's helpers keep each entry's plugin name; the guide shows catching a
@@ -81,20 +100,24 @@ await host.root(async (ctx) => (await ctx.get(Notes, { session })).add(note, ctx
 - **Registries carry natives** (design §17): a contribution may be any in-process value; an entry lives exactly as long
   as its contributor.
 
-## 2. `self.writable(initial)`
+## 2. `self.writable(initial)` and native sources
 
 A `NativeWatchable<T>` with `set(value)` (identity compared: `set` of the same value notifies nobody; a new value is a
-new frame), owned by the attempt (dropped with it); never a state member (a type error and the member check refuse
-it); usable as a contribution, a derive source and an `on` source. `set` inside a batch marks it there; outside, it
-opens its own batch.
+new frame), owned by the attempt (dropped with it; `set` after the attempt's seal throws `released`); never a state
+member; usable as a contribution, a derive source and an `on` source. `set` inside a batch marks it there; outside, it
+opens its own batch. Both `writable` and `RegistryValue` are native sources: one base (`NativeSource`) the batch marks
+and derives depend on; `self.derive` takes JSON and native sources (its type and the source resolver widen), while the
+member check still refuses a native as a state member.
 
 ## 3. `self.retryOn(...sources)`
 
-In any object's factory, anywhere: Chord installs a watch on each source before natives open, so a failed open still
-has them; a call of any source while the object is failed (`transient` or `broken`) retries it as `ref.retry()` does
-(backoff skipped, an attempt now, holders told `loading`); ignored while live or activating. Sources must live
-independently of the attempt: a registry's composed value, another object's `writable` reached through a registry,
-`constant`; a reference's member is a type error (it would fail with the dependency, R18 handles that).
+In any object's factory, anywhere: Chord follows each source with watches owned by the object (under its context,
+replaced by each attempt's declaration, stopped at the object's end; GC-tested), installed right after the factory
+returns, before natives open, so a failed open still has them; a `value` call of a source while the object is failed
+(`transient` or `broken`) retries it as `ref.retry()` does (backoff skipped, an attempt now, holders told `loading`);
+a call while it activates is remembered and retries it at once if that attempt fails (S1); ignored while live. Sources
+are those that live independently of the attempt: a `RegistryValue`, `constant`; anything else (a reference's member,
+a `writable` of the same attempt) is refused at runtime (declaration policy; TypeScript cannot tell them apart).
 
 **Which calls retry (D2, owner, 2026-10-27):** only `value` calls: a new value of a source wakes a failed object; a
 `failed` call (a throwing `compose`) does nothing, its next good composition retries.
@@ -109,19 +132,31 @@ user), this host's incarnation, `context`'s telemetry and abort signal linked un
 `ctx.abortSignal` aborted, `ctx.get` rejects `released`, every reference it took released (their calls reject
 `released`, their watches end), so an uncooperative `fn` fails at its next use of Chord, as a handler after its caller
 cancelled; work outside Chord runs on until then. `ctx.get` before `load` resolved parks like any reference;
-`host.root` after `host.close` rejects `released`. No span of its own until slice 9.
+`host.close` seals every open root scope (the host keeps them), so an `fn` waiting in `sleep(ms, ctx)` ends; `host.root`
+after `host.close` rejects `released`. No span of its own until slice 9.
 
 - `chord(fn, context)` is p3's helper over `host.root` (design §24); Chord ships none.
 
 ## 5. Durable on registries (examples, p3's pattern)
 
-- Durable's `HarnessOptions.registry` takes a `RegistryReader` (`snapshot()`, `subscribe(listener)`); Durable gets
-  `registryReader(watchable)` (in its `src`, as `StoreStorage`): `snapshot()` reads the watchable's value,
-  `subscribe` watches it. `models` and `settings` already accept functions.
+- Durable's `HarnessOptions.registry` takes a `RegistryReader` (`snapshot()`, `subscribe(listener)`, the listener
+  called synchronously after every publication). A `RegistryValue` offers a synchronous observer of its compositions
+  (`observe(observer)`, as Durable's `observeXXX`: `advance` inside the flush that composed, record only); Durable's
+  `registryReader(value)` (in its `src`) reads `.value` in `snapshot()` and forwards `observe` to `subscribe`. The
+  harness object declares the extensions registry with `self.registry(...)`, so it activates (and opens Durable) only
+  once the registry has a value. p3's `compose` builds Durable's snapshot without throwing (a duplicate task name is
+  reported and the later extension left out).
 - **Durable's views from other objects** (carry-over from 6b): the object that opens Durable contributes its harness to
-  a registry (`HarnessRegistry`, p3's); another object reads it with `self.registry(...)` and follows a view:
-  `self.follow((observer, ctx) => self.registry(HarnessRegistry).value.observeConversation(id, observer, ctx))`; a
-  harness that ends ends the follow (R4), a new one is followed on the next attempt (`retryOn` the registry).
+  a registry (`HarnessRegistry`, p3's); another object declares it in its factory and follows a view through its value:
+
+  ```ts
+  const harness = self.registry(HarnessRegistry);          // a dependency: activation waits for it
+  const view = self.follow((observer, ctx) => harness.value.observeConversation(id, observer, ctx));
+  ```
+
+  When that harness closes, Durable ends the observer `failed` (S1, a Durable change in this slice: a Session close
+  ends observers `failed`, `ended` only when the observed owner ended), so the follower fails `transient` and its retry
+  follows the new harness.
 - Example `29-registries.ts` (a router registry with two contributing plugins, a conflict reported, a `writable`
   contribution, a missing declaration healing); example `30-host-root.ts`; example `31-harness-registry.ts` (a
   Durable harness on the store, its extensions from a registry, its views followed by a second object).
@@ -130,8 +165,12 @@ cancelled; work outside Chord runs on until then. `ctx.get` before `load` resolv
 
 From `slices.md` "Slice 8": `host.root` (D3); `retryOn` (section 3); registries recomposing in the owner's flush (W4);
 `host.activity` on the facet's host: not built (nothing needs it; dropped from the carry-over); Durable's views from
-other objects (section 5). Left to slice 7: registries on reload (a reload replaces a contribution and a declaration
-atomically; staging composes nothing, decision D1 of "Review round 1"); `accepts` of contracts and jobs.
+other objects (section 5). Left to slice 7: registries on reload (a reload replaces a contribution and a provider
+atomically; staging composes nothing, decision D1 of "Review round 1"); `accepts` of contracts and jobs; a `writable`
+across a pure swap; older registry readers across a reload of the provider.
+
+**New names** (design §3, §5, the pinned reason list): the reason `unavailable/undeclared`; `HostError` kinds
+`registry_conflict`, `registry_failed`, `contribution_failed`, `contribution_refused`, each reported once per episode.
 
 ## 7. Tests and cost
 
