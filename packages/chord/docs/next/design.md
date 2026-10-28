@@ -132,7 +132,8 @@ export const Catalog = remote("catalog", { placement: () => Server(), … });
   | an arriving hold for a served type whose params place it on another host | broken `invalid/placement`; the address the hold names only routes it |
   | the hold names an address of a kind this host has a route for | over that route's link (the address's params checked against the kind, then `authorize`) |
   | otherwise (a remote type) | over the parent link; a hold that arrived *on* the parent link is never sent back to it: `unavailable` |
-  | no parent link | `unavailable` |
+  | no parent link: the host never had one | `unavailable` |
+  | no parent link: it is down (a drop) | waits on the parent path, `loading`, until the next link (design audit, 2026-10-27) |
 
   A `placement` or `authorize` that throws fails the hold broken with that error; an address whose params fail the
   kind's check is broken `invalid/placement`.
