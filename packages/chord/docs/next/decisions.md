@@ -1769,6 +1769,17 @@ validation and copies the v2 kernel added around Delta.
   the registry has a value (served and composed once; an empty table composes too, at the serve), bounded by
   `readyTimeout`; without one in time the object fails `transient` (`unavailable/undeclared`) and is retried when the
   registry gets its first value (R18); once live, a later failure of the registry changes nothing (last good value).
+- **Design audit of slices 1-6a (owner, 2026-10-27; `/tmp/design-audit-{opus,sol}.md`):** the built code follows the
+  design except for five bugs, fixed after 6b's commit with the auditors' reproductions as tests: on a failed
+  activation references are released after the natives closed (§6, §13); a dependency going live while the dependent
+  activates retries it (R18, the wake remembered); a call on a `local` object runs with the host's incarnation (§4); a
+  retirement of an unloaded document checks its stored version and fingerprint (§9, R15); `ref.retry()` holds a refused
+  hold again with a new id. Two choices: (6, "a") a link drop while a remote dependency is still loading leaves the
+  dependent `loading` until `readyTimeout` (§6; supersedes slice-3b race 18's transient failure); (7, "a") `host.hold`
+  and `host.get` check params at once, also before `load`; "fails once `load` resolved" stays only for a local type
+  not served here (§7). Stale design text updated: `mapShared` per array, job runs keeping a failed object alive only
+  while an attempt is live or activating, `ctx.state.change(fn, ctx)`, revocation closes child links, routes take a
+  context, §22's `revoke`/`chain`/`limit`, native watches collapsing only past 100 pending values.
 - **The performance and memory bar, and converging reviews (owner, 2026-10-27: "yes"):** supersedes "as good as
   HEAD in everything" for Chord v2 slices and pi changes. CPU: each hot path (calls, changes, watches, links) within
   about 5% of HEAD, measured in bursts with alternating processes pinned to one CPU; worse is fixed or goes to the
