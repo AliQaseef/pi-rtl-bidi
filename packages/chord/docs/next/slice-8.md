@@ -107,8 +107,8 @@ await host.root(async (ctx) => (await ctx.get(Notes, { session })).add(note, ctx
 A `NativeWatchable<T>` with `set(value)` (identity compared: `set` of the same value notifies nobody; a new value is a
 new frame), owned by the attempt (dropped with it; `set` after the attempt's seal throws `released`); never a state
 member; usable as a contribution, a derive source and an `on` source. `set` inside a batch marks it there; outside, it
-opens its own batch. Both `writable` and `RegistryValue` are native sources: one base (`NativeSource`) the batch marks
-and derives depend on; `self.derive` takes JSON and native sources (its type and the source resolver widen), while the
+opens its own batch. `writable`, `RegistryValue` and `ref.state` (a `NativeWatchable` since slice 3b, until now not derivable: design audit,
+2026-10-27) are native sources: one base (`NativeSource`) the batch marks and derives depend on; `self.derive` takes JSON and native sources (its type and the source resolver widen), while the
 member check still refuses a native as a state member.
 
 ## 3. `self.retryOn(...sources)`
