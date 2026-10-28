@@ -1648,6 +1648,30 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 
 		createCase(
 			options,
+			"refuses a creation and a change of one document in one commit, in either order",
+			async (storage) => {
+				await createRoot(storage);
+				for (const order of ["create first", "change first"] as const) {
+					const id = await storage.mintId<DocumentId>();
+					const create: StorageWrite = {
+						type: "document.create",
+						record: { id, kind: "twice", key: order, scope: { kind: "session" } },
+						content: { kind: "base", version: 1, value: { x: 1 } },
+					};
+					const change: StorageWrite = {
+						type: "document.change",
+						id,
+						content: { kind: "delta", version: 1, ops: [["s", ["x"], 2]] },
+					};
+					const writes = order === "create first" ? [create, change] : [change, create];
+					await expect(storage.commit(writes, adopt, context)).rejects.toThrow("more than one content command");
+					expect(await storage.document(id, "current", context)).toBeUndefined();
+				}
+			},
+		),
+
+		createCase(
+			options,
 			"rolls back record tables and secondary indexes when a document command fails",
 			async (storage) => {
 				const rootId = await createRoot(storage);

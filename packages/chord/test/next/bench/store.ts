@@ -78,7 +78,7 @@ function chordDeltas(outbox: boolean) {
 		const store = (await openStore(sqliteBackend(await openNodeSqliteDatabase(path)), context, {
 			outbox,
 		})) as ChordStore;
-		const address = { namespace: "chord", owner: "session:bench.store", kind: "note", key: "" };
+		const address = { namespace: "chord", owner: "bench.store", kind: "note", key: "" };
 		const base = { version: 1, fingerprint: "0123456789abcdef", value: VALUE };
 		let id = 0;
 		const fence = {
@@ -87,7 +87,7 @@ function chordDeltas(outbox: boolean) {
 				id = ids[0] ?? id;
 			},
 		};
-		await store.commit([createDocument(address, "latest", base, JSON.stringify(VALUE))], fence, context);
+		await store.commit([createDocument(address, base, JSON.stringify(VALUE))], fence, context);
 		return {
 			commit: (index: number) => {
 				const ops = [["s", ["n"], index + 1]] as const;
@@ -149,7 +149,7 @@ function chordPuts(outbox: boolean) {
 		const store = (await openStore(sqliteBackend(await openNodeSqliteDatabase(path)), context, {
 			outbox,
 		})) as ChordStore;
-		const table = tableSqlName("session", "bench.store", Edits.name);
+		const table = tableSqlName("bench.store", Edits.name);
 		const sql = new TableSql(table, Edits.columns, Edits.rows.physical, Edits.key);
 		const fence = { admit: () => true, adopt: () => {} };
 		const { version, record: columns, key, fingerprint } = Edits;
@@ -329,7 +329,7 @@ console.log(`heap after GC: ${heap() - before} KiB above the start`);
 async function filledEdits(count: number, body = VALUE.body, definition: typeof Edits = Edits) {
 	const { path, remove } = await file();
 	const store = (await openStore(sqliteBackend(await openNodeSqliteDatabase(path)), context)) as ChordStore;
-	const table = tableSqlName("session", "bench.store", Edits.name);
+	const table = tableSqlName("bench.store", Edits.name);
 	const fence = { admit: () => true, adopt: () => {} };
 	await prepareTables([{ definition, table }], store, fence, "bench", context);
 	const handle = new TableHandle(definition, table, store, {

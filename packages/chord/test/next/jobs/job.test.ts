@@ -325,23 +325,27 @@ describe("start", () => {
 		expect(log.value.list).toEqual(["written with the start", "from run a"]);
 	});
 
-	it("starts run with its signal aborted after an abort between the commit and its start", async () => {
+	it("an abort between the commit and the start is marked, then the signal fires; the abort joins run (D7)", async () => {
 		let signalled: boolean | undefined;
 		const { job } = await declared(Echo, () => ({
 			run: async ({ text }, ctx) => {
+				await new Promise((resolve) => setTimeout(resolve, 20));
 				signalled = ctx.abortSignal?.aborted;
 				return text;
 			},
 		}));
 		const watch = await job.running.watch(context);
+		const aborts: Promise<string>[] = [];
 		// The watch's frame of the start's commit arrives before `run` starts.
 		watch.start(async (call) => {
-			if (call.kind !== "value") return;
-			for (const entry of call.value) job.abort(entry.id);
+			if (call.kind !== "value" || aborts.length > 0) return;
+			for (const entry of call.value) aborts.push(job.abort(entry.id, context));
 		});
 		const run = await job.start({ text: "a" }, context);
 		expect(await run.outcome(context)).toMatchObject({ kind: "done", result: "a" });
 		expect(signalled).toBe(true);
+		expect(await Promise.all(aborts)).toEqual(["marked"]);
+		expect(await job.abort(run.id, context)).toBe("terminal");
 		await watch.stop();
 	});
 
@@ -578,7 +582,7 @@ describe("run", () => {
 		}));
 		const run = await job.start({ command: "a" }, context);
 		await flushed();
-		job.abort(run.id);
+		void job.abort(run.id, context);
 		expect(await run.outcome(context)).toEqual({
 			id: run.id,
 			args: { command: "a" },
@@ -598,7 +602,7 @@ describe("run", () => {
 		}));
 		const run = await job.start({ text: "kept" }, context);
 		await flushed();
-		job.abort(run.id);
+		void job.abort(run.id, context);
 		expect(await run.outcome(context)).toMatchObject({ kind: "done", result: "kept" });
 	});
 
@@ -779,7 +783,7 @@ describe("finish", () => {
 			const other = await job.start({ command: "c" }, context, { key: "other" });
 			await vi.advanceTimersByTimeAsync(0);
 			expect(job.running.value.map((entry) => entry.phase)).toEqual(["blocked", "finishing"]);
-			job.abort(run.id);
+			void job.abort(run.id, context);
 			await vi.advanceTimersByTimeAsync(0);
 			expect(await dropped).toMatchObject({ code: "aborted" });
 			expect(job.running.value.map((entry) => entry.id)).toEqual([other.id]);
@@ -819,7 +823,7 @@ describe("finish", () => {
 		}));
 		const run = await job.start({ text: "a" }, context);
 		await flushed();
-		job.abort(run.id);
+		void job.abort(run.id, context);
 		gate.resolve();
 		expect((await run.outcome(context)).kind).toBe("done");
 	});
@@ -1299,7 +1303,7 @@ describe("GC", () => {
 				() => new Error("expected a rejection"),
 				(error: Error) => error,
 			);
-			job.abort(run.id);
+			void job.abort(run.id, context);
 			await vi.advanceTimersByTimeAsync(0);
 			expect(await dropped).toMatchObject({ code: "aborted" });
 			expect(job.running.value).toEqual([]);

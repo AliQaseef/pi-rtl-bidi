@@ -5,6 +5,7 @@ export type { ActivityCounts } from "./activity.ts";
 export type { Factory, Self, StoreSelf } from "./attempt.ts";
 export type { Ctx } from "./ctx.ts";
 export { defineFacet, type Facet, type FacetHost, type ServeOptions } from "./facet.ts";
+export type { FollowAttach, FollowAttachment, FollowObserver } from "./follow.ts";
 export {
 	createHost,
 	type GetOptions,

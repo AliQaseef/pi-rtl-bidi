@@ -956,6 +956,8 @@ node --conditions=source --experimental-strip-types test/examples/13-chat.ts
 | [32-tests-after-edits](test/examples/32-tests-after-edits.ts) | An `afterRun` hook that runs the tests after every run that edited files, a fix run when they fail, and input waiting for them |
 | [33-turn-limit-and-continue](test/examples/33-turn-limit-and-continue.ts) | A per-conversation turn limit, `runFailure`, and continuing without a user message |
 | [34-submit-in-commit](test/examples/34-submit-in-commit.ts) | Admitting a visitor's steer inside the host's own commit with `submit(tx, draft)` and `whenIdle: "reject"` |
+| [35-durable-on-the-store](test/examples/35-durable-on-the-store.ts) | A Harness on `StoreStorage` in a Chord host's store, next to a Chord object's own table: one commit queue, one id allocator, one export |
+| [36-durable-views](test/examples/36-durable-views.ts) | A Chord object following a Durable view with `self.follow`: its frames and a member reading the followed value |
 | [00](test/examples/00-conversation.ts)–[12](test/examples/12-recovery.ts) | The layers underneath: sessions, documents, forks, watches, the Harness, agent configuration, reload, extension state, tasks, recovery |
 
 Examples that call OpenAI need `OPENAI_API_KEY`; most use the faux provider otherwise.

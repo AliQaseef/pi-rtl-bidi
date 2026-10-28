@@ -17,7 +17,7 @@ import { TableHandle } from "../../../src/next/store/table-handle.ts";
 import { MIGRATION_CHUNK, prepareTables } from "../../../src/next/store/table-migration.ts";
 import { memoryStore, rejection, tableOwner } from "../support.ts";
 
-const TABLE = "client:app.store:edits";
+const TABLE = "app.store:edits";
 const OPEN = { admit: () => true, adopt: () => {} };
 
 const EditsV1 = defineTable("edits", {

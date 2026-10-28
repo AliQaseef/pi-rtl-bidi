@@ -27,7 +27,7 @@ slice spec's section citations are for orientation, not a reading limit (owner, 
 
 - **L1** (`src/next/contracts`, `src/next/data`): contracts, params and identity, argument checks, principal keys,
   errors. `index.ts` for apps, `internal.ts` for Chord's own code.
-- **Slices 1, 2, 3a, 3b, 4a, 4b, 5, 6a** (committed; 5 `4a5b45c45`, 6a 2026-10-27): `src/next/documents`, `state`, `host`, `jobs`, `link`,
+- **Slices 1, 2, 3a, 3b, 4a, 4b, 5, 6a, 6b** (committed; 5 `4a5b45c45`, 6a and 6b 2026-10-27/28): `src/next/documents`, `state`, `host`, `jobs`, `link`,
   `remote`, `store`; examples 01-25; benchmarks in `benchmarks.md`.
 - **Chord's shared code** (upstream pi): `src/watch.ts` (`Watch`, `NativeWatch`, `WatchHandle`, `WatchEnd`,
   `NativeWatchable`), Delta (`track`, `diffRevisions`, `applyImmutable`, encoders, `PendingOps`, `appendText`),
@@ -161,19 +161,6 @@ deleted (the slice's spec and code are the record). Moved here from `carry-over.
 - **`map(bytes())` is refused at declaration** ("unsupported keyword `~refine`"): TypeBox's `Record` copies the bytes
   schema's check as an enumerable key, which the snapshot walk refuses. An L1 bug found in slice 3a, not fixed yet.
 
-### Slice 6b: Durable and jobs on the store (from slice 5 and L3a-d)
-
-Specified in `slice-6b.md` (decided 2026-10-27, D1-D9, R1-R4, "owner names and claims"); each entry below is taken there.
-
-- **Persisted jobs** (from slice 5): `persist: { resume }`, records and state documents in the owner's store (D5), the
-  restart limit (D6), `abort` stored (D7), deferred state (D8), the seal as a clean stop (R3), the `finish` failure
-  count persisted, the job fingerprint and the start trace carrier stored.
-- **`StoreStorage`** (D1-D4, R1, R2, claims): Durable's `Storage` on the store, passing its conformance suite; one id
-  allocator (D3); Durable's checks in the step; fork copies resolved before the step (S11); `adopt` in the host's batch.
-- **`self.follow`** (D9, R4): a Chord source over Durable's synchronous observers. Reaching Durable from other objects
-  (the harness in a registry entry) moves to slice 8.
-- **The applier for batch apply**: every `StoreWrite` kind, `applyBatch`, one code path with import.
-
 ### Slice 7: reload and rollout
 
 - **A native restart drains first** (owner, 2026-10-26): park new calls, await running calls (bounded by
@@ -185,6 +172,9 @@ Specified in `slice-6b.md` (decided 2026-10-27, D1-D9, R1-R4, "owner names and c
   per routine invocation; holds unsubscribed at seal and re-bound by member name; keyed members' versions mapped per
   key; in-memory `migrate` wired to reload (6a builds the slot version check and the migrate); `rebuild` (key and
   column-type changes) if a case needs it.
+- **From slice 6b:** a persisted run of another job version or fingerprint stays `blocked { version }` with its record
+  as stored (resolve it on reload); blocked persisted runs are retried on reload; runs of jobs the code no longer
+  declares (below).
 - **A run whose job the new code no longer declares** (slice 6a builder, 2026-10-27): 6a keeps it in its phase,
   waiting, not invoked (unreachable without reload); slice 7 decides `blocked` with a reason (design §15's
   `blocked { version }` family).
@@ -233,6 +223,7 @@ Specified in `slice-6b.md` (decided 2026-10-27, D1-D9, R1-R4, "owner names and c
 ### Slice 9: telemetry
 
 - Spans for routine calls and job runs (from slice 5).
+- The use of a persisted run's stored start trace carrier (`trace`, stored since slice 6b).
 
 - Round-3 cut to decide: C11 (`ctx.trace`).
 

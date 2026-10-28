@@ -372,6 +372,7 @@ export class Hold implements Holder {
 				},
 				// The member's source ended with its object, which ends this hold.
 				end: () => {},
+				endAfterDelivery: () => {},
 			},
 			encoder: encoder(),
 			pending: new PendingOps(),

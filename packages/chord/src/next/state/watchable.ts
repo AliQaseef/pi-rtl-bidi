@@ -20,6 +20,11 @@ export interface Subscriber {
 	advance(call: WatchCall<JsonValue>, context: Context): void;
 	/** The source ended for good with `end`; nothing follows, and the subscriber is dropped. */
 	end(end: WatchEnd): void;
+	/**
+	 * The source ended for good after its last call (a followed runtime ended): a subscriber delivering later (a watch)
+	 * ends `ended` once it delivered what it was given, others end now.
+	 */
+	endAfterDelivery(): void;
 }
 
 /**
@@ -145,6 +150,18 @@ export abstract class Source implements Watchable<JsonValue> {
 	 */
 	protected failWatches(error: unknown, context: Context): void {
 		this.forward({ kind: "failed", error: handedOut(error) }, context);
+	}
+
+	/**
+	 * Ends every watch and subscriber for good once what they were given is delivered (a followed runtime ended after a
+	 * last call, Durable's `endAfterDelivery`): `ended`; nothing follows.
+	 */
+	protected endWatchesAfterDelivery(): void {
+		for (const watch of [...this.#watches]) watch.endAfterDelivery();
+		if (this.#subscribers.size === 0) return;
+		const subscribers = [...this.#subscribers];
+		this.#subscribers.clear();
+		for (const subscriber of subscribers) subscriber.endAfterDelivery();
 	}
 
 	/** Ends every watch and subscriber for good (its owner ended): `ended`; nothing follows. */

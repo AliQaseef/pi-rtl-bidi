@@ -21,6 +21,7 @@ import { openNodeSqliteDatabase } from "../../../src/sqlite/node.ts";
 import {
 	failures,
 	fakeTimers,
+	faultyStore,
 	flushed,
 	forEachCodec,
 	linked,
@@ -921,20 +922,16 @@ describe("the host's store", () => {
 	});
 
 	it("reports storage_failed once and closes the host; the app still closes the store", async () => {
-		const store = await memoryStore();
+		const { store, fail } = await faultyStore();
 		const errors: HostError[] = [];
 		const host = createHost({ store, onError: (error) => errors.push(error) });
 		await host.load([], context);
-		const broken: StagedWrite = {
-			order: "write",
-			apply: async (step) => {
-				await step.run("INSERT INTO no_such_table VALUES (1)");
-				return { kind: "document.retire", id: 0, revision: 0 };
-			},
-		};
+		const write: StagedWrite = { order: "write", apply: async () => [] };
 		const fence = { admit: () => true, adopt: () => {} };
-		await expect(store.commit([broken], fence, context)).rejects.toMatchObject({ reason: "storage_failed" });
-		await expect(store.commit([broken], fence, context)).rejects.toMatchObject({ reason: "storage_failed" });
+		// A failed `COMMIT`: an unknown outcome (D4).
+		fail("COMMIT");
+		await expect(store.commit([write], fence, context)).rejects.toMatchObject({ reason: "storage_failed" });
+		await expect(store.commit([write], fence, context)).rejects.toMatchObject({ reason: "storage_failed" });
 		// The host closed itself; the app's own close returns that closing.
 		expect((host as ChordHost).closing).toBe(true);
 		await host.close(context);

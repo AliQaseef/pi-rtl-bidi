@@ -27,11 +27,18 @@ export class Batch {
 	#sending = false;
 	/** Changes `within` deferred while the flushes sent, for the next commit. */
 	#later: (() => void)[] = [];
+	/** Changes `soon` collected for the commit on the next microtask, while one is queued. */
+	#soon: (() => void)[] | undefined;
 
 	constructor(report: (error: BatchError) => void, metrics: TelemetryMetrics | undefined) {
 		this.#report = report;
 		this.reportListener = (error) => report({ kind: "listener_error", error });
 		this.#metrics = metrics;
+	}
+
+	/** Whether a commit's adoption, a delivery or a derive compute runs now: a change made now lands in this batch. */
+	get running(): boolean {
+		return this.#running;
 	}
 
 	/** Throws `invalid/reentrant` inside the batch: `operation` may not run during adoptions or derive computes. */
@@ -99,6 +106,26 @@ export class Batch {
 		if (this.#sending) this.#later.push(adopt);
 		else if (this.#running) adopt();
 		else this.commit(adopt, context);
+	}
+
+	/**
+	 * Runs `adopt` in one commit on the next microtask, together with every other `soon` until then (changes arriving
+	 * outside any commit, as a followed runtime's calls off its commit step: one batch for all of them). `context` is
+	 * the first one's.
+	 */
+	soon(adopt: () => void, context: Context): void {
+		if (this.#soon !== undefined) {
+			this.#soon.push(adopt);
+			return;
+		}
+		const soon = [adopt];
+		this.#soon = soon;
+		queueMicrotask(() => {
+			this.#soon = undefined;
+			this.commit(() => {
+				for (const each of soon) each();
+			}, context);
+		});
 	}
 
 	/** Lists a watched source the current commit changed. */

@@ -604,7 +604,7 @@ describe("tables", () => {
 			},
 		);
 		await host.get(Store, {}, context);
-		expect(store.table("client:app.store:edits")).toMatchObject({
+		expect(store.table("app.store:edits")).toMatchObject({
 			version: 1,
 			state: "ready",
 			indexes: { by_at: ["at"] },
@@ -717,7 +717,7 @@ describe("eager migrations at activation (slice 6a §9)", () => {
 	afterEach(() => {
 		pumping = false;
 	});
-	const TABLE = "client:app.store:edits";
+	const TABLE = "app.store:edits";
 	const OPEN = { admit: () => true, adopt: () => {} };
 	const EditsV1 = defineTable("edits", { version: 1, columns: { id: str(), at: int() }, key: ["id"] });
 	const Store = local("app.store", { version: 1, params: {}, members: { n: int() } });

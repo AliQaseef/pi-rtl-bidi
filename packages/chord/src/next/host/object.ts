@@ -142,6 +142,8 @@ export class ChordObject implements Target {
 	readonly #members = new Map<string, MemberSource>();
 	/** The keys of its keyed members that references hold, across attempts. */
 	readonly #keys: KeyedMembers;
+	/** The one timer storing its jobs' held state changes by their earliest deadline (D8), while one is held. */
+	#flush: { readonly deadline: number; readonly timer: ReturnType<typeof setTimeout> } | undefined;
 
 	constructor(
 		host: AnyHost,
@@ -167,12 +169,9 @@ export class ChordObject implements Target {
 			label: this.label,
 			batch: host.batch,
 			context,
-			store:
-				store === undefined
-					? undefined
-					: { store, owner: `${host.address?.kind ?? "client"}:${served.contract.name}` },
+			store: store === undefined ? undefined : { store, owner: served.contract.name },
 			fail: (error) => {
-				if (this.#state.kind === "live") this.failLive(this.#state.attempt, error);
+				if (this.#state.kind === "live") this.failLive(this.#state.attempt, { kind: "broken", error });
 			},
 		});
 	}
@@ -327,12 +326,15 @@ export class ChordObject implements Target {
 	jobRecords(definition: JobDefinition<unknown, unknown, unknown>): JobRecords {
 		const records = this.#jobs.get(definition.name);
 		if (records === undefined) {
+			const { store } = this.host;
 			const owner = {
 				label: this.label,
 				host: this.host,
 				context: this.#context,
 				documents: this.documents,
+				store: store === undefined ? undefined : { store, owner: this.served.contract.name },
 				countRuns: (delta: number) => this.countRuns(delta),
+				held: (deadline: number) => this.#heldUntil(deadline),
 			};
 			const made = new JobRecords(definition, owner);
 			this.#jobs.set(definition.name, made);
@@ -347,19 +349,34 @@ export class ChordObject implements Target {
 	}
 
 	/**
-	 * A runtime failure of the live attempt `attempt` (a `migrate` failing on access, a stored version newer than the
-	 * code): the attempt is sealed and the object `failed` with the broken `cause`; calls reject with it, holders are
-	 * told, the state members keep their values once the admitted commits adopted, the natives close in the background
-	 * (then its references are released), `onError` gets `object_failed` once. Documents and job runs stay. Recovery:
-	 * `ref.retry()` (a new attempt, whose members the member sources follow once it is live). A failure of a sealed
-	 * attempt is ignored.
+	 * Claims table `table` (its SQL name) in the host's store for this object, until its end (slice 6b claims); held by
+	 * another owner: `invalid/args`, which fails the declaring factory.
 	 */
-	failLive(attempt: Attempt, error: ChordError): void {
+	claimTable(table: string): void {
+		this.host.store!.claims.table(table, this);
+	}
+
+	/** Claims this object's documents in `namespace` of the host's store, as `claimTable`. */
+	claimDocuments(namespace: string): void {
+		this.host.store!.claims.documents(this.served.contract.name, namespace, this);
+	}
+
+	/**
+	 * A runtime failure of the live attempt `attempt`: `broken` (a `migrate` failing on access, a stored version newer
+	 * than the code, a refused commit) or `transient` (a followed runtime failed, R4): the attempt is sealed and the
+	 * object `failed` with `cause`; calls reject with it, holders are told, the state members keep their values once the
+	 * admitted commits adopted, the natives close in the background (then its references are released), `onError` gets
+	 * `object_failed` once. Documents and job runs stay. Recovery: a broken failure by `ref.retry()`, a transient one
+	 * after its identity's backoff too (a new attempt, whose members the member sources follow once it is live). A
+	 * failure of a sealed attempt is ignored, so several at once fail it once.
+	 */
+	failLive(attempt: Attempt, cause: FailureCause): void {
 		const state = this.#state;
 		if (state.kind !== "live" || state.attempt !== attempt) return;
-		const cause: FailureCause = { kind: "broken", error };
-		this.host.backoff.delete(this.identity);
-		const failure: Failed = { kind: "failed", cause, retryAt: undefined };
+		const { error } = cause;
+		if (cause.kind === "transient") this.host.backoff.failed(this.identity);
+		else this.host.backoff.delete(this.identity);
+		const failure: Failed = { kind: "failed", cause, retryAt: this.host.backoff.until(this.identity) };
 		this.#state = { kind: "failed", failure, holding: undefined };
 		this.#lastFailure = error;
 		this.#outcome = settlement();
@@ -380,6 +397,26 @@ export class ChordObject implements Target {
 		this.host.report({ kind: "object_failed", object: this.label, failure: cause });
 		this.#notify();
 		this.#idle();
+	}
+
+	/** A held state change must be stored by `deadline`: the timer is set for the earliest one. */
+	#heldUntil(deadline: number): void {
+		if (this.#flush !== undefined && this.#flush.deadline <= deadline) return;
+		if (this.#flush !== undefined) clearTimeout(this.#flush.timer);
+		// A foreground timer: what is held is stored before the process may exit.
+		const timer = setTimeout(() => void this.#flushHeld(), Math.max(0, deadline - Date.now()));
+		this.#flush = { deadline, timer };
+	}
+
+	/** The timer fired: every held change past its deadline is stored, and the timer set for the next one. */
+	async #flushHeld(): Promise<void> {
+		this.#flush = undefined;
+		if (this.#state.kind === "ended") return;
+		const now = Date.now();
+		const jobs = [...this.#jobs.values()];
+		await Promise.all(jobs.map((records) => records.flushHeld(now)));
+		const next = Math.min(...jobs.map((records) => records.nextDeadline()));
+		if (Number.isFinite(next)) this.#heldUntil(next);
 	}
 
 	/**
@@ -580,6 +617,8 @@ export class ChordObject implements Target {
 		const previous = this.host.endingOf(this.identity);
 		this.#state = { kind: "ended", ended: { kind: "ended", error } };
 		for (const records of this.#jobs.values()) records.end(error);
+		if (this.#flush !== undefined) clearTimeout(this.#flush.timer);
+		this.#flush = undefined;
 		this.documents.seal();
 		this.#stopLingering();
 		this.host.forget(this);
@@ -648,6 +687,7 @@ export class ChordObject implements Target {
 		if (teardown.kind !== "end") teardown.attempt.releaseReferences();
 		await this.documents.settled();
 		this.documents.end();
+		this.host.store?.claims.release(this);
 		for (const records of this.#jobs.values()) records.drop();
 		this.#jobs.clear();
 		return failures;

@@ -306,6 +306,7 @@ class OnRoutine {
 					if (call.kind === "value") done(true);
 				},
 				end: () => done(false),
+				endAfterDelivery: () => done(false),
 			};
 			const aborted = (): void => done(false);
 			signal?.addEventListener("abort", aborted, { once: true });

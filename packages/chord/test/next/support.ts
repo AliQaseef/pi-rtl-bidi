@@ -1,6 +1,7 @@
 // Test support: cost counters through the in-memory telemetry adapter, GC checks, and hosts, links, watches and
 // rejections for the slice tests.
 
+import { DatabaseSync } from "node:sqlite";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 import { InMemoryTelemetryContext } from "@earendil-works/pi-telemetry";
@@ -65,7 +66,7 @@ import { evolveTable } from "../../src/next/store/table-evolve.ts";
 import { TableHandle, type TableOwner } from "../../src/next/store/table-handle.ts";
 import { prepareTables } from "../../src/next/store/table-migration.ts";
 import { nodeCompression } from "../../src/next-node/compression.ts";
-import { openNodeSqliteDatabase } from "../../src/sqlite/node.ts";
+import { NodeSqliteDatabase, openNodeSqliteDatabase } from "../../src/sqlite/node.ts";
 import type { NativeWatchHandle, WatchCall, WatchHandle } from "../../src/watch.ts";
 
 /** Counts of the `chord.data.*` counters. */
@@ -158,7 +159,7 @@ export function valuesOf<T>(calls: readonly WatchCall<T>[]): (T | { readonly fai
  */
 export function failLive(objects: readonly WeakRef<ChordObject>[], self: Self, error: ChordError): void {
 	// The factory's `self` is its attempt.
-	for (const object of objects) object.deref()?.failLive(self as unknown as Attempt, error);
+	for (const object of objects) object.deref()?.failLive(self as unknown as Attempt, { kind: "broken", error });
 }
 
 /** A local type whose objects' attempts a test ends by hand (`restartable`); it ends with its last reference. */
@@ -252,6 +253,37 @@ export async function memoryStore(options?: { readonly outbox?: boolean }): Prom
 	return (await openStore(sqliteBackend(db), BACKGROUND_CONTEXT, options)) as ChordStore;
 }
 
+/** A statement of the Node facade's transactions a test can make fail. */
+export type TransactionStatement = "BEGIN IMMEDIATE" | "COMMIT" | "ROLLBACK";
+
+/**
+ * A Node SQLite facade on `:memory:` whose next `statement` throws, once per `fail` (the D4 matrix: a failed
+ * `BEGIN`, `COMMIT` or `ROLLBACK`, as the real facade sees one).
+ */
+export function faultyDatabase(): { readonly db: NodeSqliteDatabase; fail(statement: TransactionStatement): void } {
+	const database = new DatabaseSync(":memory:");
+	const failing = new Set<string>();
+	const exec = database.exec.bind(database);
+	database.exec = (sql: string): void => {
+		if (!failing.delete(sql)) {
+			exec(sql);
+			return;
+		}
+		// A failed `ROLLBACK` here still rolls back, so the database stays usable for the rest of the test.
+		if (sql === "ROLLBACK") exec(sql);
+		throw new Error(`injected: ${sql} failed`);
+	};
+	return { db: new NodeSqliteDatabase(database), fail: (statement) => void failing.add(statement) };
+}
+
+/** A store over `faultyDatabase()`, and its `fail`. */
+export async function faultyStore(options?: {
+	readonly outbox?: boolean;
+}): Promise<{ readonly store: ChordStore; fail(statement: TransactionStatement): void }> {
+	const { db, fail } = faultyDatabase();
+	return { store: (await openStore(sqliteBackend(db), BACKGROUND_CONTEXT, options)) as ChordStore, fail };
+}
+
 /**
  * Holds `store`'s next commit step inside its backend transaction, after its admission: `entered` resolves there,
  * `release()` lets it finish; later commits run as usual.
@@ -267,7 +299,7 @@ export function holdNextCommit(store: ChordStore): { readonly entered: Promise<v
 			apply: async () => {
 				entered.resolve();
 				await gate.promise;
-				return { kind: "dropIndex", table: "x", name: "y" };
+				return [{ kind: "dropIndex", table: "x", name: "y" }];
 			},
 		};
 		return commit([...writes, held], fence, ctx);
@@ -280,13 +312,13 @@ export function tableOwner(failures: ChordError[] = []): TableOwner & { readonly
 	return { label: "app.store", scope: {}, assertLive: () => {}, fail: (error) => void failures.push(error), failures };
 }
 
-/** Creates `definition` (and its indexes) in `store` as `session:app.store:<name>` and returns a handle to it. */
+/** Creates `definition` (and its indexes) in `store` as `app.store:<name>` and returns a handle to it. */
 export async function tableIn(
 	store: ChordStore,
 	definition: TableDefinition,
 	owner = tableOwner(),
 ): Promise<TableHandle> {
-	const table = `session:app.store:${definition.name}`;
+	const table = `app.store:${definition.name}`;
 	const fence = { admit: () => true, adopt: () => {} };
 	await prepareTables([{ definition, table }], store, fence, "app.store", BACKGROUND_CONTEXT);
 	return new TableHandle(definition, table, store, owner);
@@ -886,8 +918,8 @@ export const ArchiveTables = (() => {
 })();
 
 /**
- * A store holding a bit of everything an archive carries: `client:app.store:edits` at version 2 with 150 rows (two
- * export pages; some written at version 1, `NULL` and `json(...)` cells, an index), `client:app.store:notes` left
+ * A store holding a bit of everything an archive carries: `app.store:edits` at version 2 with 150 rows (two
+ * export pages; some written at version 1, `NULL` and `json(...)` cells, an index), `app.store:notes` left
  * `migrating` at version 2 after one committed chunk, and documents: a singleton, keyed ones with deltas after their
  * base, and a retired one.
  */
@@ -895,8 +927,8 @@ export async function archiveStore(options?: { readonly outbox?: boolean }): Pro
 	const { EditsV1, EditsV2, NotesV1, NotesV2 } = ArchiveTables;
 	const store = await memoryStore(options);
 	const fence = { admit: () => true, adopt: () => {} };
-	const edits = await tableAt(store, "client:app.store:edits", EditsV1);
-	const notes = await tableAt(store, "client:app.store:notes", NotesV1);
+	const edits = await tableAt(store, "app.store:edits", EditsV1);
+	const notes = await tableAt(store, "app.store:notes", NotesV1);
 	const staged: StagedWrite[] = [];
 	const editChanges = new TableChanges(edits, staged);
 	for (let i = 0; i < 150; i++) {
@@ -911,21 +943,15 @@ export async function archiveStore(options?: { readonly outbox?: boolean }): Pro
 	const noteChanges = new TableChanges(notes, staged);
 	for (let i = 0; i < 150; i++) noteChanges.put({ id: i, text: `t${i}` });
 	await store.commit(staged, fence, BACKGROUND_CONTEXT);
+	await prepareTables([{ definition: EditsV2, table: "app.store:edits" }], store, fence, "app", BACKGROUND_CONTEXT);
 	await prepareTables(
-		[{ definition: EditsV2, table: "client:app.store:edits" }],
-		store,
-		fence,
-		"app",
-		BACKGROUND_CONTEXT,
-	);
-	await prepareTables(
-		[{ definition: NotesV2, table: "client:app.store:notes" }],
+		[{ definition: NotesV2, table: "app.store:notes" }],
 		store,
 		fence,
 		"app",
 		BACKGROUND_CONTEXT,
 	).catch(() => {});
-	const address = { namespace: "chord", owner: "client:app.store", kind: "memo" };
+	const address = { namespace: "chord", owner: "app.store", kind: "memo" };
 	const base = (value: JsonValue) => ({ version: 1, fingerprint: "f1", value });
 	let ids: readonly number[] = [];
 	const created = {
@@ -936,7 +962,7 @@ export async function archiveStore(options?: { readonly outbox?: boolean }): Pro
 	};
 	await store.commit(
 		["", "a", "b", "gone"].map((key) =>
-			createDocument({ ...address, key }, "latest", base({ title: key }), JSON.stringify({ title: key })),
+			createDocument({ ...address, key }, base({ title: key }), JSON.stringify({ title: key })),
 		),
 		created,
 		BACKGROUND_CONTEXT,

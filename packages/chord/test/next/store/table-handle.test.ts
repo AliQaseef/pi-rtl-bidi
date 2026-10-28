@@ -125,12 +125,12 @@ describe("unreadable cells", () => {
 	it("a json cell of a newer version fails the owner and the read, the data intact", async () => {
 		const owner = tableOwner();
 		const edits = await filled(1, owner);
-		await store.read((executor) => executor.run(`UPDATE "session:app.store:edits" SET "meta$v" = 2`), context);
+		await store.read((executor) => executor.run(`UPDATE "app.store:edits" SET "meta$v" = 2`), context);
 		const error = await rejection(edits.get({ id: "e000" }, context));
 		expect(error).toMatchObject({ code: "unavailable" });
 		expect(owner.failures).toHaveLength(1);
-		expect(
-			await store.read((executor) => executor.get(`SELECT meta FROM "session:app.store:edits"`), context),
-		).toEqual({ meta: '{"a":0}' });
+		expect(await store.read((executor) => executor.get(`SELECT meta FROM "app.store:edits"`), context)).toEqual({
+			meta: '{"a":0}',
+		});
 	});
 });

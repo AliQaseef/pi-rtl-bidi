@@ -386,6 +386,7 @@ describe("subscribers, directly", () => {
 			advance: (call) =>
 				void events.push(call.kind === "value" ? [call.value, call.ops] : (call.error as Error).message),
 			end: (end) => void events.push(end.kind),
+			endAfterDelivery: () => void events.push("ended"),
 		};
 		expect(source.value).toBe(0);
 		source.subscribe(subscriber);

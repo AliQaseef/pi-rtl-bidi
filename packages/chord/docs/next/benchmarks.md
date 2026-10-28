@@ -490,3 +490,96 @@ Observations:
 - Late migration chunks cost what early ones do (paging forward by the last key keeps each chunk's read bounded); the
   spec's estimate of about 15 µs per migrated row holds with room.
 - A bulk write's step is the one place a single commit holds every owner's commits for milliseconds; the guide says so.
+
+## Slice 6b: Durable on the store, persisted jobs (2026-10-28)
+
+Node 24.4.1, one CPU (`taskset -c 6`), SQLite files in `tmpdir()`. HEAD is `b2fcfee08`, extracted at a path of the same
+length (`/home/badlogic/pi-6h`); runs alternate HEAD and the build.
+
+**Durable's storage benchmark** (`packages/durable/test/storage.bench.ts`, `TIMING_SCALE`), `StoreStorage` (outbox off)
+against `SqliteStorage` in the same process, mean ms per operation over three runs (p75 where the mean is one outlier):
+
+| Case | SqliteStorage | StoreStorage | |
+| --- | --- | --- | --- |
+| exact entry lookup | 0.0030 | 0.0030 | 0% |
+| entry page scan (100) | 0.0942 | 0.0940 | 0% |
+| filtered task scan (50) | 0.0206 (p75 0.0200) | 0.0220 (p75 0.0207) | +7% mean, +3% p75 |
+| exact document address among many | 0.0037 | 0.0037 | 0% |
+| document replay tail (0) | 0.0089 (p75 0.0084) | 0.0092 (p75 0.0085) | +3% mean, +1% p75 |
+| document replay tail (16 / 128 / 1024) | 0.0300 / 0.1726 / 1.224 | 0.0270 / 0.1522 / 1.135 | -10% / -12% / -7% |
+| ancient / recent historical read | 0.1681 / 0.1611 | 0.1541 / 0.1513 | -8% / -6% |
+| fork-depth history scan (100) | 0.1177 (p75 0.1156) | 0.1208 (p75 0.1159) | +3% mean, 0% p75 |
+| fork-depth head lookup | 0.0361 | 0.0332 | -8% |
+| commit one entry (20 samples) | 0.0439 (p75 0.0416) | 0.0601 (p75 0.0373) | +37% mean, -10% p75 |
+| commit 100 entries | 0.743 | 0.620 | -17% |
+| commit mixed entry/task/submission/document | 0.195 | 0.187 | -4% |
+| reopen and first exact read | 0.294 | 0.443 | +51% |
+
+Warm micro-benchmarks behind the same cases (each read 20,000 times; commits 10,000 after 2,000 warm-up): page scan
+91.2 vs 90.6 µs, task scan 19.9 vs 20.1 µs, fork-depth scan 114.1 vs 114.9 µs, head lookup 35.3 vs 32.9 µs, document
+address 3.57 vs 3.68 µs, replay tail (0) 8.41 vs 8.44 µs; one entry per commit 29.6 vs 27.8 µs mean, 18.4 vs 17.1 µs
+median. What it took, beyond the first build's compiled reads, point lookups without a bound `LIMIT`, version columns
+selected only past version 1 and the counting read guard:
+
+- **Reads select only the record.** A scan selected an entry's `commit_seq` too (only `entry(id)` needs it): 7% of a
+  page scan.
+- **No index for head markers on every entry.** `entries.by_head (conversation_id, has_head, id)` cost about 5.5 µs per
+  commit (a raw insert: 39.7 vs 45.2 µs); `SqliteStorage` has a partial index (`WHERE head IS NOT NULL`), which the
+  table vocabulary does not have. The head markers are an `entry_heads` table instead, written only with an entry that
+  has one: a commit without one writes no second index, and a head lookup reads the newest head's id, then the entry.
+- **A document record is one JSON text.** `meta` keeps the whole Durable record, its creation seq included; a read
+  selects `meta` (and `retired_at` only at a point).
+- **A store already at the newest schema opens with one read** (schema version, encoding and metadata row), without
+  the migrations' write transaction: 84 → 71 µs on a fresh connection.
+
+Commit one entry: the mean is one sample (Maglev compiling the commit path on the first fixtures: 130 and 386 µs at
+fixtures 25 and 30 of the first store round of a 60-fixture replay, none in the second round, no GC or deopt traced);
+the median and p75 are lower than `SqliteStorage`'s. Reopen: a fresh connection on a copied file, measured in parts
+(`openNodeSqliteDatabase` is the same for both): `SqliteStorage.open` 42-60 µs; `openStore` 63-71 µs (the schema read,
+the catalog with its JSON parse) plus `StoreStorage.open` 75 µs (declaring six tables: their SQL rendered, claims; the
+catalog check of the table preparation; `max(record_ids.id)` for the allocator, as §2.1 asks; compiling the point
+reads), first read +3 µs: about 0.1-0.15 ms once per open, cold code, not on any hot path.
+
+**Statements per commit** (cost guard in `packages/durable/test/store-storage.test.ts`): an entry append and a document
+delta take 4 each (`SqliteStorage`: 5 and about 7).
+
+**Memory** (`packages/durable/test/storage-memory.ts`): heap after seeding 0.16 → 0.30 MiB (1k), 0.17 → 0.32 MiB (10k):
+a fixed cost of the store (catalog, compiled statements, claims, the store's code), the same at both scales; heap after
+reads 0.13 → 0.16-0.18 MiB. Disk 0.61 → 0.58 MiB (1k), 4.34 → 4.38 MiB (10k).
+
+**Chord's commit gate** (`test/next/bench/store.ts`), HEAD → build, two alternating runs each, medians:
+
+| Case | HEAD | build |
+| --- | --- | --- |
+| (a) one document delta per commit | 13.6-13.7 µs | 13.8-14.0 µs (+2%) |
+| (b) one table put per commit | 12.8-13.3 µs | 13.0-13.2 µs |
+| (c) whole transactions (no watch / watched) | 17.2-17.3 / 17.1-17.2 µs | 17.4-17.7 / 17.2-17.7 µs (+2%) |
+| (d) one in-memory document (median / burst) | 2.1 / 2.9-3.0 µs | 2.1 / 4.9 µs |
+| heap after GC | 2940 KiB | 2996 KiB |
+
+The revisions index is a partial index on bases (`(document_id, seq) WHERE kind = 'base'`): a delta writes no index
+entry (the first build's `(document_id, kind, seq)` cost (a) 15%). (d)'s burst is not the in-memory path: run alone
+(only section (d), three alternating runs) HEAD gives 4.9-5.1 µs and the build 4.9-5.0 µs per commit, and 40 bursts of
+1,000 in a fresh process 2.17 vs 2.18-2.38 µs; in the full gate, HEAD's in-memory path runs warm from the persisted
+sections before it, the build's does not share as much of their code (`StoredChange`'s variants).
+
+**Durable's conversation view benchmark** (`test/conversation-view-bench.ts`, `PI_DURABLE_BENCH_STORAGE`), two runs
+each, `SqliteStorage` → `StoreStorage`: append one entry per commit 56.1-57.2 → 56.2-57.0 µs with one watch, 61.0-62.1
+→ 62.7-63.1 µs with four (+2%); bursts of 50 884-888 → 891 µs; `pi.live` only 62.7-63.0 → 65.1-66.6 µs (+4-6%); a
+long-lived watch over 20,000 appends 0.83-0.85 → 0.84-0.85 s CPU; heaps 21.5 → 21.7 MiB.
+
+**Fix round 1** (2026-10-28, after the build reviews): `StoreStorage`'s reads take one promise besides the store's guard
+(no `#call` wrapper; `close` waits for its commits, a read changes nothing), their request errors in a tagged result.
+Warm micro-benchmark (20,000 runs, two runs each, `SqliteStorage` → `StoreStorage`): filtered task scan 19.8 → 19.8-20.1
+µs, `entry(conversation, id)` over the fork chain 23.1 → 21.9-22.3 µs. `storage.bench.ts` (two runs): task scan mean
+0.0207 → 0.0217-0.0218 ms (p75 0.0200-0.0203 → 0.0204-0.0206), fork-depth scan 0.1177-0.1188 → 0.1210-0.1242 (p75
+0.1154-0.1167 → 0.1160-0.1193), the rest as above.
+`conversation-view-bench` "resume 20 back", three runs: CPU 4.23-4.47 → 4.50-5.14 ms for a 3 ms scenario (one sample
+each; the head lookup and scans under it are at parity or faster in the micro-benchmark). The persisted-job fixes
+(one invocation per call of `run`, held state folded in a `PendingOps`): start 55.5 → 55.2 µs, immediate state change
+21.3 → 21.2 µs, deferred 3.2 → 3.5 µs (the fold), in memory unchanged.
+
+**Persisted jobs** (`test/next/bench/jobs.ts`, 7 bursts of 500, medians): a start (resolved after its commit) 8.4 µs in
+memory, 55.5 µs persisted (two commits: the record and state created, then the reservation); a state change inside
+`run` 2.7 µs in memory, 21.3 µs persisted (one delta commit, as the gate's (c)), 3.2 µs deferred (stored with the
+outcome).

@@ -140,7 +140,7 @@ const facet = defineFacet<P>((host) => {
 			runShell: async ({ command, lines, requestId }, ctx) =>
 				(await shell.start({ command, lines }, ctx, { key: requestId })).id,
 			abortShell: async ({ id }) => {
-				shell.abort(id);
+				void shell.abort(id, context);
 				return null;
 			},
 		};

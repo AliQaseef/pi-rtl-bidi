@@ -126,6 +126,14 @@ export type HostError =
 			readonly id: string;
 			readonly error: unknown;
 	  }
+	/** A persisted run was cut off five times in a row by crashes (D6): it ends `failed { restart_limit }`, `finish` runs. */
+	| {
+			readonly kind: "job_interrupted";
+			readonly object: string;
+			readonly job: string;
+			readonly id: string;
+			readonly restarts: number;
+	  }
 	/** A blocked run was dropped without `finish`: aborted, or its object ended. */
 	| { readonly kind: "job_dropped"; readonly object: string; readonly job: string; readonly id: string };
 
@@ -303,7 +311,7 @@ export class ChordHost<P extends Principal = Principal, R extends JsonValue = Js
 		this.#placement = new Placement(this.address, this.#types, this.#routes, this.#parent);
 		// Chord's own: `openStore` made it.
 		this.store = options.store as ChordStore | undefined;
-		this.store?.attach((error) => this.#storageFailed(error));
+		this.store?.attach({ failed: (error) => this.#storageFailed(error), batch: this.batch });
 	}
 
 	async load(facets: readonly { readonly name: string; readonly facet: Facet<P> }[], context: Context): Promise<void> {

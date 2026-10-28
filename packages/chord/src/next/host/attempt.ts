@@ -5,7 +5,7 @@
 
 import { awaitWithContext, type Context, withAbortSignal } from "../../context/index.ts";
 import type { JsonValue } from "../../json.ts";
-import type { NativeWatchable, Watchable } from "../../watch.ts";
+import type { NativeWatchable, Watchable, WatchEnd } from "../../watch.ts";
 import type { Contract, Implementation, ParamsOf } from "../contracts/index.ts";
 import { contractData, type ShapeOf } from "../contracts/internal.ts";
 import { ChordError, type FailureCause, type Principal } from "../data/index.ts";
@@ -30,6 +30,7 @@ import { type Table, TableHandle } from "../store/table-handle.ts";
 import { prepareTables } from "../store/table-migration.ts";
 import { CallContext, type Caller, type Ctx, withLinkedAbortSignal } from "./ctx.ts";
 import { Deadline } from "./deadline.ts";
+import { type FollowAttach, FollowSource } from "./follow.ts";
 import type { HostError } from "./host.ts";
 import { attachDerives, checkImplementation, type KeyedBinding, type Members } from "./members.ts";
 import {
@@ -77,6 +78,13 @@ export interface Self<P extends Principal = Principal> extends RoutineDeclaratio
 	): Native<T>;
 	/** Runs `fn` as one transaction of this object (§9). */
 	tx<R>(fn: (tx: Tx) => R | Promise<R>, context: Context): Promise<R>;
+	/**
+	 * A source following another runtime's synchronous observer (Durable's views, slice 6b §3): `attach` runs during
+	 * activation once the natives opened (a rejection or `undefined` fails the activation `transient`), and the observer
+	 * is detached when the attempt ends. Its runtime failing fails this object `transient`; its `ended` is final, the
+	 * source keeping its last value. A state member, a derive source, an `on` source.
+	 */
+	follow<T>(attach: FollowAttach<T>): Watchable<T>;
 	/**
 	 * This object's job `definition` (§15), once per job name: `run` runs each started run outside transactions,
 	 * `finish` records its outcome in one. Starts are taken once the object is live.
@@ -143,6 +151,8 @@ export class Attempt implements StoreSelf, KeyDeclarer {
 	#members: Members | undefined;
 	#variant: string | undefined;
 	readonly #derives: Derive[] = [];
+	/** Its followed sources, attached in declaration order after the natives. */
+	readonly #follows: FollowSource[] = [];
 	readonly #routines = new Routines();
 	readonly #jobs = new Map<string, Job>();
 	/** The tables it declared, by name. */
@@ -162,6 +172,8 @@ export class Attempt implements StoreSelf, KeyDeclarer {
 	#previous: Attempt | undefined;
 	/** What activation returns once the attempt was abandoned: a timeout, a cycle through its object, or its end. */
 	#abandoned: Exclude<Activation, { readonly kind: "live" }> | undefined;
+	/** A followed source's end while this attempt activated: it fails as it goes live (if its activation returned). */
+	#endedEarly: ChordError | undefined;
 
 	constructor(object: ChordObject, previous: Attempt | undefined, context: Context) {
 		this.#object = object;
@@ -173,8 +185,11 @@ export class Attempt implements StoreSelf, KeyDeclarer {
 	state<D extends StateDefinition<JsonObject, boolean, boolean>>(definition: D): HandleOf<D> {
 		this.#assertDeclaring("state");
 		const what = `state "${definition.name}"`;
-		if (definition.persist) this.#assertPersistable(what);
 		if (this.#declared.has(definition.name)) throw new Error(`${this.#object.label}: ${what} is declared twice`);
+		if (definition.persist) {
+			this.#assertPersistable(what);
+			this.#object.claimDocuments("chord");
+		}
 		this.#declared.set(definition.name, definition);
 		return this.#object.documents.declare(definition, this.#token, this);
 	}
@@ -189,15 +204,16 @@ export class Attempt implements StoreSelf, KeyDeclarer {
 	table<C extends Columns, K extends readonly string[]>(definition: TableDefinition<C, K>): Table<C, K> {
 		this.#assertDeclaring("table");
 		const object = this.#object;
-		const { host, served, label } = object;
+		const { served, label } = object;
 		const store = this.#assertPersistable(`table "${definition.name}"`);
 		if (this.#tables.has(definition.name)) throw new Error(`${label}: table "${definition.name}" is declared twice`);
-		const sqlName = tableSqlName(host.address?.kind ?? "client", served.contract.name, definition.name);
+		const sqlName = tableSqlName(served.contract.name, definition.name);
+		object.claimTable(sqlName);
 		const owner = {
 			label,
 			scope: object.documents,
 			assertLive: () => object.documents.assertLive(),
-			fail: (error: ChordError) => object.failLive(this, error),
+			fail: (error: ChordError) => object.failLive(this, { kind: "broken", error }),
 		};
 		// The handle's rows are the definition's, typed by `C` and `K`.
 		const handle = new TableHandle(definition as unknown as TableDefinition, sqlName, store, owner);
@@ -249,6 +265,16 @@ export class Attempt implements StoreSelf, KeyDeclarer {
 		return this.#object.documents.tx(fn, this.#token, context);
 	}
 
+	follow<T>(attach: FollowAttach<T>): Watchable<T> {
+		this.#assertDeclaring("follow");
+		const object = this.#object;
+		const owner = { label: object.label, context: this.#context, ended: (end: WatchEnd) => this.#followEnded(end) };
+		// The source holds what the runtime gives it, `T`, as Chord's JSON sources do.
+		const source = new FollowSource(attach as unknown as FollowAttach<JsonValue>, owner, object.host.batch);
+		this.#follows.push(source);
+		return source as unknown as Watchable<T>;
+	}
+
 	on<T>(source: Watchable<T>, fn: OnHandler<T>): void;
 	on<T>(source: NativeWatchable<T>, fn: OnNativeHandler<T>): void;
 	on(source: Watchable<unknown> | NativeWatchable<unknown>, fn: (...args: never[]) => void | Promise<void>): void {
@@ -266,6 +292,11 @@ export class Attempt implements StoreSelf, KeyDeclarer {
 		const object = this.#object;
 		if (this.#jobs.has(definition.name)) {
 			throw new Error(`${object.label}: job "${definition.name}" is declared twice`);
+		}
+		if (definition.persist !== undefined) {
+			this.#assertPersistable(`job "${definition.name}"`);
+			object.claimDocuments("chord.jobs");
+			object.claimDocuments("chord.job-states");
 		}
 		const owner = {
 			host: object.host,
@@ -314,9 +345,34 @@ export class Attempt implements StoreSelf, KeyDeclarer {
 		this.#abort.abort(outcome.kind === "ended" ? outcome.error : outcome.cause.error);
 	}
 
+	/**
+	 * A followed runtime ended its observer (R4): `failed` fails this attempt `transient`, live or activating; `ended`
+	 * does only while it activates (it would go live over a source that ended). An activation that already returned
+	 * fails as it goes live.
+	 */
+	#followEnded(end: WatchEnd): void {
+		if (end.kind === "ended" && this.#isLive) return;
+		const { label } = this.#object;
+		const error =
+			end.kind === "failed"
+				? asChordError(end.error, label)
+				: new ChordError({ code: "unavailable", message: `${label}: a followed source ended while it activated` });
+		if (this.#isLive) {
+			this.#object.failLive(this, { kind: "transient", error });
+			return;
+		}
+		this.#endedEarly ??= error;
+		this.abandon({ kind: "failed", cause: { kind: "transient", error } });
+	}
+
 	/** The object went live: its jobs take starts and its routines start, in this turn; both stop when it is sealed. */
 	live(): void {
 		this.#isLive = true;
+		const early = this.#endedEarly;
+		if (early !== undefined) {
+			this.#object.failLive(this, { kind: "transient", error: early });
+			return;
+		}
 		for (const job of this.#jobs.values()) job.live();
 		const { host, label } = this.#object;
 		this.#routines.start({
@@ -421,6 +477,8 @@ export class Attempt implements StoreSelf, KeyDeclarer {
 		if ((await drained(this.#running.keys(), this.#running.size, host.timeouts.close)) === "timeout") {
 			host.report({ kind: "drain_timeout", object: label });
 		}
+		// The close writer: the persisted runs the seal stopped, and the held state changes (slice 6b §4.2).
+		for (const job of this.#jobs.values()) await job.writeAtClose(this.#context);
 		// Work stuck past the drain keeps running, but no longer counts as a call or holds its `ctx.get` references.
 		for (const [running, cleanup] of this.#running) {
 			this.#running.delete(running);
@@ -434,10 +492,14 @@ export class Attempt implements StoreSelf, KeyDeclarer {
 		return failures;
 	}
 
-	/** Detaches its derives (once their object no longer needs them): reads throw `released`, their watches end. */
+	/**
+	 * Detaches its derives (once their object no longer needs them: reads throw `released`, their watches end) and its
+	 * followed sources (their observers detached, their watches ended).
+	 */
 	detach(): void {
 		const ended = this.#object.ended();
 		for (const derive of this.#derives) derive.detach(ended);
+		for (const follow of this.#follows) follow.detach();
 	}
 
 	/** Releases its references, and the previous attempt's if this one never bound its own. */
@@ -458,6 +520,8 @@ export class Attempt implements StoreSelf, KeyDeclarer {
 			const loading = documents.load(this.#opening);
 			if (loading !== undefined) await loading;
 			if (this.#tables.size > 0) await this.#prepareTables(deadline);
+			// A persisted job's runs, loaded once per object: rebuilt before anything runs.
+			for (const job of this.#jobs.values()) await job.load(this.#opening);
 			const { host } = this.#object;
 			dependencies = this.#references.map(({ binding, contract, params }) =>
 				host.bind(binding, contract, params, this.#opening),
@@ -506,6 +570,15 @@ export class Attempt implements StoreSelf, KeyDeclarer {
 				await awaitWithContext(native.open(this.#opening), this.#opening);
 			} catch (error) {
 				return this.#abandoned ?? { kind: "failed", cause: openFailure(error, this.#object.label) };
+			}
+		}
+		for (const follow of this.#follows) {
+			if (this.#abandoned !== undefined) return this.#abandoned;
+			try {
+				await awaitWithContext(follow.attach(this.#opening), this.#opening);
+			} catch (error) {
+				const cause: FailureCause = { kind: "transient", error: asChordError(error, this.#object.label) };
+				return this.#abandoned ?? { kind: "failed", cause };
 			}
 		}
 		try {

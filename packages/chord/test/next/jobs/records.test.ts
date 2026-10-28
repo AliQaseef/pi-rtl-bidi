@@ -114,7 +114,7 @@ describe("runs across attempts", () => {
 		});
 		const run = await jobs[0]!.start({ text: "a" }, context);
 		await flushed();
-		jobs[0]!.abort(run.id);
+		void jobs[0]!.abort(run.id, context);
 		await flushed();
 		expect(attempts).toEqual([1]);
 		await restart();
@@ -176,7 +176,7 @@ describe("the object's end during an admitted commit", () => {
 				apply: async () => {
 					inStep.resolve();
 					await gate.promise;
-					return { kind: "dropIndex", table: "x", name: "y" };
+					return [{ kind: "dropIndex", table: "x", name: "y" }];
 				},
 			};
 			return commit([...writes, held], fence, ctx);
