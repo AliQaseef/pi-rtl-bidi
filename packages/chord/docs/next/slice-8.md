@@ -21,7 +21,7 @@ export const Http = defineRegistry<HttpContribution, Router>("chord.http", { ver
 export default defineFacet((host, self) => {
   host.serve(Http, {                                              // the one provider (Q8), as for object types
     compose: (table, { report }) => buildRouter(table, report),   // pure; always a value; conflicts reported
-    accepts: { 1: (old: HttpContributionV1): HttpContribution => upgrade(old) },
+    accepts: { 1: { contribution: (old: HttpContributionV1) => upgrade(old), value: (router) => routerV1(router) } },
   });
   host.serve(HttpServer, (_, self) => {
     const router = self.registry(Http);                           // a NativeWatchable of the composed value
@@ -93,6 +93,10 @@ await host.root(async (ctx) => (await ctx.get(Notes, { session })).add(note, ctx
   the composed value mapped back with `accepts[old].value` (computed once per composition and version, while such a
   reader exists); without that mapping, or for a reader newer than the provider, its dependency fails
   `contract_mismatch` (reported). `accepts: { [old]: { contribution?: (old) => current, value?: (current) => old } }`.
+  Adapters are the provider's code, guarded as `compose`: a `contribution` adapter that throws leaves that contribution
+  out (reported `contribution_failed`); a `value` adapter that throws fails only that version's value, by the rules of a
+  throwing `compose` (its readers keep the last good mapped value; before any, a reader of that version waiting at
+  activation fails `transient`, retried when a mapped value arrives); current readers are never affected.
 - **Helpers:** `keyed(table, entriesOf)` (a map, a duplicate key reported, the first by plugin name wins) and
   `ordered(table, itemsOf, orderOf?)`.
 - **Use sites guard contributions** (Q8): Chord's helpers keep each entry's plugin name; the guide shows catching a
