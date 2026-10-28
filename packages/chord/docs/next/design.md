@@ -945,8 +945,8 @@ host.serve(DraftStore, (_, self) => {               // local, empty params: may 
   reload) and survive reloads and native restarts of a live object; long-lived objects creating many keyed in-memory documents retire
   them themselves. Persisted documents stay until retired.
 - **Persisted data only in `local` objects with empty params (P3, owner, 2026-10-21):** persisted documents and tables
-  live in `local` objects with empty params (one per host and type); their address is (host kind, object type, name,
-  key), never a host instance such as the session id (W7),
+  live in `local` objects with empty params (one per host and type); their address is (object type, name, key), never a
+  host instance such as the session id (W7; no host kind either since slice 6b R2: a store belongs to one host),
   so a params change never orphans data. Per-entity data is keyed documents or table rows there, with an app-chosen
   key; objects with params keep only in-memory state and read persisted data by key. Renaming a persisted store's type or
   definition, or changing how keys are formed, is an explicit one-off migration in the store.
@@ -1000,7 +1000,7 @@ host.serve(DraftStore, (_, self) => {               // local, empty params: may 
   access, `checkpointWhen` (required for persisted documents, R14), retire, and the documents engine's invariants (create before change, no
   change after retire, one live incarnation per address, `deltasSinceBase`).
 - **Where persisted documents live:** rows of the store's documents engine (S13) with address `(namespace: "chord",
-  owner: "<host kind>:<object type>", kind: <definition>, key)` (key `""` for a singleton), never a host instance (W7); ids from the store's
+  owner: "<object type>", kind: <definition>, key)` (key `""` for a singleton), never a host instance (W7); ids from the store's
   counter (S10). Chord ships no storage of its own: no `DocumentStorage` interface, no Chord SQLite or memory document
   storage and no Chord storage conformance suite (the store's conformance suite covers the engine); the frozen `next/`
   storages are not ported. The store is passed to the session's host by base code (owner, 2026-10-26):
@@ -1069,8 +1069,8 @@ host.serve(DraftStore, (_, self) => {               // local, empty params: may 
   materialized and fingerprinted at declaration, as contracts' `evolve`; the store replays the recorded version's
   successors in order (DDL and `migrating`, the data step, `ready`); key columns are immutable in `set`.
 - **Eager migrations and addresses (owner, 2026-10-26):** the activation attempt's `readyTimeout` deadline does not
-  run while an eager migration step runs (getters still time out by their own); a host without an address uses `client`
-  as its host kind in store addresses.
+  run while an eager migration step runs (getters still time out by their own). Store names carry no host kind (slice
+  6b R2, owner, 2026-10-27): tables are `"<object type>:<table>"`, document owners `"<object type>"`.
 - **Eager `rows` migrations** commit in chunks of 100 rows (owner, 2026-10-26; a fixed constant: about 1 ms of commit
   step per chunk, the total time is the same for larger chunks, and every other owner's commit waits for the step).
   Between chunks the migration yields one macrotask without `setTimeout`'s 1 ms clamp: `setImmediate` where the

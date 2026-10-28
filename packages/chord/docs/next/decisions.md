@@ -1705,6 +1705,12 @@ validation and copies the v2 kernel added around Delta.
   a point find it), `rewindable` (everything kept). `retireDocument` reads the record's `history`; no flag, archives
   and replicas carry it. Rejected: keeping every retired record (one rule, but a dead row per finished job run, two
   with its state, and per retired keyed document, that Chord never reads).
+- **Slice 6b R2: no host kind in store names (owner, 2026-10-27: "what use is host in table names anyways? seems
+  stupid. no host"; supersedes the host-kind part of W7, "Restricted names" and "Slice 6a's three code questions" (3)):**
+  tables are `"<object type>:<table>"` (`"notes.store:edits"`, `"pi.durable:entries"`), document owners
+  `"<object type>"`; a store belongs to one host (rule 7), so the host kind told nothing, and `StoreStorage` and stores
+  used before or without a host get the same names. W7's rule stays: no host instance in a name. Changed in 6a's code
+  in 6b; the applier checks two parts.
 - **The performance and memory bar, and converging reviews (owner, 2026-10-27: "yes"):** supersedes "as good as
   HEAD in everything" for Chord v2 slices and pi changes. CPU: each hot path (calls, changes, watches, links) within
   about 5% of HEAD, measured in bursts with alternating processes pinned to one CPU; worse is fixed or goes to the

@@ -58,7 +58,7 @@ Durable's four record tables (conversations, entries, tasks, submissions) and it
 
 **Layout (D2, owner, 2026-10-27: "the whole purpose of this slice"):** declared tables of the store, written as
 ordinary `put` writes: `defineTable`s that `StoreStorage` declares for itself under the type name `pi.durable` (SQL names
-`"<host kind>:pi.durable:<table>"`, e.g. `"session:pi.durable:entries"`; type names are unique per app, so no plugin
+`"pi.durable:<table>"`, e.g. `"pi.durable:entries"` (R2: no host kind in store names); type names are unique per app, so no plugin
 table can meet them), each row the record's indexed columns (`id`, `conversation_id`, `kind`, `status`, …) plus
 the whole record in a `json(...)` column. The outbox, export, import and the applier handle them as every table;
 Durable's layout changes later through `evolveTable`. The partial head index becomes an index on `(conversation_id,
