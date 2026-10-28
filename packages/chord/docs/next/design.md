@@ -586,8 +586,8 @@ host.serve(Notes, ({ session }, principal, self) =>
 - **The seal fence** (owner, 2026-10-26): every attempt has a seal token (a job run invocation its own, for its state
   changes and outcome). After the seal, new work through the attempt's handles is refused at use (`self.tx`, `ctx.get`,
   a job or routine start); commits are checked when they enter the store's commit step (sealed: rejected `released`,
-  nothing written) and at adopt (sealed during the SQL: durable, adopted into the object's documents, staged job
-  changes abandoned); at the seal a transaction not yet in the step is aborted and the line released, a started step
+  nothing written) and at adopt (sealed during the SQL: durable, adopted into the object's documents, its staged job
+  changes adopted into the object too: decision "Second spec review: the majority" (3)); at the seal a transaction not yet in the step is aborted and the line released, a started step
   finishes before teardown completes; cleanup (references, presence, activity counts) still runs. A pure swap is not a
   replacement.
 - **Ending** (slice 1, 2): new calls are rejected; every caller of a running call gets `released` at once; the
