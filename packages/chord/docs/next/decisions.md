@@ -1771,6 +1771,15 @@ validation and copies the v2 kernel added around Delta.
   setups a registry without a value cannot get one before a reload, so a reader then fails at once `transient`
   (`unavailable/undeclared`) and is retried when the registry gets its first value (R18), as `self.get` of a type not
   served here fails at once (refined 2026-10-27 after the second spec review: no `readyTimeout` wait at start); once live, a later failure of the registry changes nothing (last good value).
+- **Slice 7b's open points, as recommended (owner, 2026-10-29: "yes"; brief `slice-7b/`):** (1) the API is
+  `host.reload(facets, ctx)`, by plugin name (added, changed; a plugin missing from the list is removed), resolving with
+  a report of what each object did, rejecting with the code error and nothing changed; `load` stays the first call. (2)
+  A `writable` across a pure swap goes back to its initial value (the new factory makes a new one; no positional
+  matching). (3) The rollout across hosts is the app's: it calls `host.reload` on each host in order (server, workers,
+  clients); Chord guarantees per host (staging, commit, `installing`, rollback). (4) No install watchdog: `reload`
+  takes a context and the app passes its deadline. (5) The loader lives in Chord (`chord/next/loader`, slice 7c). (6)
+  Chord ships the app kit as optional subpaths: `loader` and `dev` (7c), `http` and `workers` (slice 10), `web` and
+  `tui` (slice 11); telemetry (slice 9) last.
 - **A plugin's npm dependencies are bundled; external only by opt-in (owner, 2026-10-29: "explicit opt in + (a)"):**
   a plugin's `dependencies` are installed into its own `node_modules` (`npm install --ignore-scripts`) and bundled into
   each facet that imports them (host packages, its `peerDependencies`, stay external and are passed in). On Node a
