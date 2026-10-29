@@ -1,4 +1,4 @@
-# Dependency resolution in Chord v2: one model (draft 7, redesign session, 2026-10-29)
+# Dependency resolution in Chord v2: one model (decided, 2026-10-29)
 
 Status: proposal for the owner, not decided. Built in slice 7 with reload and rollout. Sources: the owner's direction
 ("park until resolved"; "no difference between local and remote resolution: a link going is like a plugin
@@ -178,7 +178,7 @@ through, or recovers by its own backoff.
 | **a name becomes usable, or an install ends, on a host**: a publication (`load`'s setups, a reload's commit, an install's commit) serves a type, a registry, a version; a registry composes or maps a value at a version; an install ends without a commit (rejected) | the unbound requests indexed under those names; the provider's `installing` holds; a refused hold re-runs its start and sends `loading`, then `bound` or `failed` |
 
 No new message kind for wakes: `loading`, `bound`, `failed` and `retry` exist. The wire's `failed` carries the new cause
-kind `waiting`; `loading` and a `waiting` `failed` carry the provider's attempt id for the probe (§7).
+kind `waiting`.
 
 ## 5. Removal, versions, rollout
 
@@ -231,121 +231,33 @@ kind `waiting`; `loading` and a `waiting` `failed` carry the provider's attempt 
    - p2 today resumes its harness without waiting for all host objects (`apps/p2/src/hosts/worker.ts`), because its
      worker objects that need server types are reachable only after `control.ready()`.
 
-## 7. Cycles
+## 7. Cycles (decided 2026-10-29: no probe)
 
-On one host, cycles are found exactly as today: at `self.get`, following the waiting edges of activating and parked
-attempts. Across hosts, a hold carries the activation chain it was made in (today), which finds every cycle whose
-objects start one after another. What remains is the documented gap (design §6): objects on two hosts that start at
-the same moment and need each other. The owner decided on 2026-10-24 (slice 4b review decisions (2)) that this is a
-documented limitation that times out and retries, with no probe message. Without dependency deadlines that timeout no
-longer exists, so the gap needs one of two answers (**Owner**):
+On one host, cycles are found as today: at `self.get`, following the waiting edges of activating and parked attempts
+(exact). Across hosts, a hold carries the activation chain it was made in, which finds every ring whose objects start
+one after another. The remaining gap, a ring across hosts whose objects start at the same moment, is not detected:
+without a dependency deadline it stays parked. It is made visible: an attempt parked longer than its `readyTimeout` on
+a remote attempt that is itself only `loading` is reported once per parking episode as `HostError` `parked_long
+{ object, waitingFor, since }`; nothing fails or retries. A cycle is a plugin bug; the guide gives plugin authors and
+agents four rules: (1) a factory declares only what the object needs, never a type that needs it back; (2)
+back-references and occasional lookups go into methods and routines (`ctx.get`); (3) data flows up through state and
+registries, not mutual `self.get`; (4) host-lifetime objects on the server never declare worker types in their factory.
 
-- **(A) The 4b decision, narrowed.** One deadline stays: an attempt parked on a dependency held over a link whose target
-  attempt is known and still activating or parked fails `transient` after its `readyTimeout` and retries with backoff;
-  its next attempt usually starts after the other side and its chain finds the cycle. It has a cost that decides
-  against it: the target being *parked* is the common case of a chain across hosts waiting for a missing plugin (a
-  tab's view on a worker object that waits for an uninstalled type), and those dependents would time out and poll
-  again, as today, so "local = remote" would not hold across hosts. Narrowing it to targets that are `loading` (not
-  `failed { waiting }`) avoids that but misses a real ring: A and B on two hosts wait on each other, B also on a
-  missing X; B is `failed { waiting }`, so A is too; when X appears, both stay `failed { waiting }` on each other, with
-  no deadline and no chain to find it. And even the timeout does not find what it is meant to (round 6, Fable): an
-  object's chain is fixed when it is created and its instance id survives retries, so a retried attempt sends the same
-  hold with the same chain; two simultaneous starts time out and retry in lockstep and are never found.
-- **(B) The probe (recommended)**, below: no deadline at all, one new message kind, the most intricate rule set in the
-  model. Five
-  review rounds found a counterexample in each of the first four drafts; draft 6's version answers all of them, but it
-  has not been reviewed again, and slice 7 would have to prove it with tests before the deadline could go.
-
-### (B) The probe
-
-Replaces the activation chain in holds. On one host the `self.get` walk stays (it is synchronous and exact: a ring
-with no remote edge is found there, where (B1)'s timer does not run; Opus, round 7); the probe serves the rings that
-cross a link. It replaces draft 1's bounded chain too
-draft 1's bounded chain (a ring of 33 is never found with chains cut at 32; chains keep stale ancestry). Draft 5 replaces the
-second round by a check along the recorded path (round 4, Sol: two rounds through different stale paths can report a
-ring that never existed, `/tmp/model/sol-probe4.log`).
-
-1. **Attempts, edges, tokens.** Every attempt has its own id (uuidv7 per attempt: a retry or reload is a new
-   attempt). A **wait edge** runs from a parked attempt to the parked or activating attempt it waits for, through a
-   bound request (unbound waits and registry reads are never edges; they are not deadlocks). Each edge carries an **edge
-   token** (round 5, Astra, Sol): a number from a counter per attempt, never reused, replaced by a fresh one on any
-   interruption or change of that edge, so two requests to one object are two edges: a new target attempt (also a
-   local target's retry, without a re-bind), any `loading` on a bound or pending hold (a relay's upstream re-hold
-   included), an unbinding, a rebinding, a re-hold after a reconnect. An attempt is parked for one interval only (one
-   that passed its dependency check never parks again) and ids are never reused. A provider tells its consumers the attempt they wait for on
-   every non-live answer: `loading { hold, attempt }` and a `waiting` `failed { hold, cause, attempt }`.
-2. **A search per edge change.** Whenever a parked attempt gets a new edge or a new token on one, it starts a
-   search: `probe { kind: "search", round, initiator, trail }` along each of its wait edges, `round` the next number of
-   a counter the attempt keeps, `trail` the list of `(attempt, edge token)` hops it crossed, starting with
-   the initiator's own. A ring closes at its last
-   edge, and that edge's source starts the search that finds it. Coalesced per batch. Locally a call on the target
-   attempt, forwarded through a queue (no recursion); over a link the message `probe { hold, to, ... }`, consumer to
-   provider, relayed by hold id with the origin. **Probes are honoured on parent and route links and dropped on child
-   links** (`accept`), whatever `trusted` says.
-3. **Forwarding.** An attempt receiving a search drops it if `to` is not its current attempt or it is not parked. If
-   the initiator is itself, the search returned (4). If the attempt is already in the trail, it drops it (a ring that does not contain the initiator is
-   found by its own members' searches; Opus). Otherwise it forwards it along every wait edge, appending `(itself, the edge's
-   token)` to the trail, only if the round number is higher than the one it stored for that
-   initiator (older or equal rounds are dropped: the initiator superseded them), and stores it. The seen map holds one
-   number per initiator, up to 256 initiators, and goes with the attempt.
-4. **The check.** A returned search is accepted while its initiating attempt is still parked, whatever round it
-   carries (round 7, Astra: a re-search must not invalidate an older search still under way); the check decides. The
-   initiator then sends `probe { kind: "check", round, trail }` along the recorded trail: the initiator first verifies its own hop; each hop passes it on only if it is still
-   that attempt, still parked, still has the recorded edge token, pointing at the next hop's attempt; otherwise the
-   check dies (also on a `to` mismatch). The check follows the trail by position and bypasses the seen
-   map. The initiator verifies its own hop again when the check returns. If the check returns, the initiator fails `broken invalid/cycle`, the path named for display from the trail,
-   and today's propagation breaks the other activating objects on the ring and the dependents off it. 5. **No silent loss.** Dedupe can drop the copy of a search that travelled the ring in favour of a copy whose path
-   later breaks (Astra, round 5); then the check dies and nothing is left to find the ring. Round 6 tried `dead`
-   notices back to the initiator; Sol and Astra showed that reliable notices need recovery state per search that
-   eviction may not drop and that a long-parked attempt would otherwise keep for every initiator that ever passed (a
-   leak), i.e. a full search lifecycle with cancellation. Two ways (**Owner**, part of decision 6):
-   - **(B1) Re-search with backoff (recommended).** An attempt parked on a remote attempt starts a fresh search again
-     after a backoff (1 s doubling to 60 s, reset by an edge change), whether it shows `loading` or `failed { waiting }`;
-     the timer stops when the attempt leaves parking. No `dead` messages, no recovery state, eviction
-     only costs work; a new search starts within one backoff period, so every stable ring that crosses a link is
-     eventually found (no wall-clock bound: delivery is only fair; a ring on one host is the walk's). The timer runs as long as the attempt stays parked on a remote attempt: a view on a worker object that
-     waits for a missing plugin re-searches every 60 s until a reload (Fable: cheap, but for as long as it waits). The timer sends probes only: it never
-     fails an object, re-holds or polls a provider. Cost: one probe per parked remote dependent per period, which
-     crosses the downstream wait graph and dies at its leaves (an unbound wait is not an edge).
-   - **(B2) Events only.** Each search is owned until it settles: branches report completion or abort back along their
-     trails, a dropped probe answers `dead { initiator, round }` with a reverse route, an edge records the searches it
-     carries until they settle, and an initiator that ends or starts a new round cancels its old one along the same
-     routes. Complete without a timer, bounded by the searches in flight, and the most intricate protocol in Chord; not
-     yet specified to the reviewers' satisfaction.
-   Rejected: enumerating every simple trail without dedupe (Sol's correctness reference): no ring copy is ever
-   suppressed, but work is exponential on chains of diamonds.
-- **Why a reported ring existed:** every edge of the trail kept its token from the moment the search crossed it
-  to the moment the check crossed it; the search crossed all of them before the check started, so at the moment the
-  check started every edge of the ring existed at once. A token changes on every interruption and is never reused, so an edge cannot
-  vanish and come back unnoticed. Sol's counterexample fails at the check: `C1` is no longer `B`'s target.
-- **Why every ring is found** (under an eventually stable wait graph and fair delivery; endless edge churn can keep
-  invalidating searches; with rule 5's (B1) or (B2) for a search suppressed behind a path that broke): a ring is closed by its last edge; its source starts a search when the edge appears; every
-  other edge exists then and every attempt on the ring waits transitively on the source, so none goes live before the
-  search and the check return. Rings of any length, local and remote mixed. On a DAG searches die at the leaves; on a
-  diamond the second arrival is dropped.
-- **What it does not promise:** (1) a ring that existed when the check started may be broken up by a concurrent reload,
-  retry, unbinding or revocation just after; it is still reported (it did exist). Its broken objects recover as every
-  broken object does: `ref.retry()` or a reload of their plugin. (2) Linear work under every schedule: with more than
-  256 initiators passing one attempt at once, an evicted entry lets a search be forwarded again, so work can grow with
-  the number of simple paths (never endlessly: a search never revisits an attempt in its trail). (3) Constant message size: a probe carries its trail, so its size grows with the length of the
-  path it crossed (a returning search's trail is as long as its ring); no cap cuts it, since the trail is the proof.
-- **Cost:** one search per edge change, crossing each downstream edge once, one check per returned search; with (B1),
-  one more search per backoff period for every attempt parked on a remote attempt, also while an acyclic chain waits
-  for a missing plugin, plus the trail bytes. The bounded memory is the seen map's; probes in flight are bounded by
-  the searches started.
-- **Transition:** today's dependency deadline for activations waiting across links stays until the probe's tests pass
-  in slice 7 (long rings, diamonds, a ring closed after a reconnect with unchanged attempt ids, Sol's phantom schedule,
-  300 concurrent initiators, edges added and removed, reloads, relays, forged probes); then it goes in the same slice.
+Rejected (owner, 2026-10-29): the probe (edge-chasing searches with a check along the recorded trail; seven review
+rounds, `/tmp/model/review*-*.md`; complete only with a re-search timer or a full search lifecycle, the most intricate
+code in Chord, for a plugin bug) and the slice 4b timeout narrowed (it polls chains across hosts again, misses a ring of
+`waiting` attempts, and retries in lockstep without finding the ring).
 
 ## 8. Getters, holds, calls: one rule
 
 - **`host.hold`** returns a reference at once; only invalid params throw (also before `load`). A missing local type
   gives `failed { waiting }` after the publication, `loading` before it.
-- **`host.get`, `ctx.get` and `host.registry`:** resolve when live; wait while `loading`, or `failed { transient }`
-  (its own retry is under way), up to their `readyTimeout`; reject at once on `failed { waiting }` or `{ broken }`. On
+- **`host.get`, `ctx.get` and `host.registry`** (owner, 2026-10-29, decision 2): resolve when live; wait while `loading`,
+  `failed { transient }` or `failed { waiting }`, up to their `readyTimeout` (default 60 s, the caller's choice), then
+  reject with the last cause; reject at once only on `failed { broken }`. On
   success, rejection or timeout their temporary wait goes; `host.registry` returns the `RegistryValue` with its
-  ordinary watch ownership (no `release()`). **Owner:** recommended (nobody waits 60 s for a plugin that is not
-  there; code that wants to wait holds instead), or wait through `waiting` too.
+  ordinary watch ownership (no `release()`). A UI holds and shows `ref.state`; code that needs the object now gets it, with the
+  patience it passes.
 - **Calls** on a `loading` reference park, each bounded by the reference's `readyTimeout` from when it was made; on a
   `failed` one they reject at once with the cause; sent calls are never resent.
 
@@ -384,8 +296,8 @@ ring that never existed, `/tmp/model/sol-probe4.log`).
 | `readyTimeout` of a parked call | kept | an action must not run long after it was asked for |
 | identity backoff 1-60 s | only for the object's own `transient` failures | nothing else says the disk or network is back |
 | dependency backoff, polling of refused holds | removed | recovery is an event |
-| dependency deadline across links | (A): only for a parked attempt whose remote target attempt stays activating or parked; (B): until the probe's tests pass, then removed | the simultaneous-cycle gap |
-| probe re-search backoff (B1) | new, only with (B1): 1 s doubling to 60 s while parked on a remote attempt | finds a ring whose search was suppressed; sends probes only, never fails or re-holds |
+| dependency deadline across links | removed | the simultaneous-cycle gap is a plugin bug, reported by `parked_long` |
+| `parked_long` report | new: once per parking episode after `readyTimeout` on a remote attempt that is only `loading` | a diagnostic; nothing fails or retries |
 | route backoff, heartbeat, `closeTimeout`, routine and `finish` backoffs, `linger` | kept | not dependency waits |
 | rollout install timeout (not built) | a watchdog on the install only | never a deadline for dependencies |
 
@@ -394,22 +306,19 @@ ring that never existed, `/tmp/model/sol-probe4.log`).
 R18 (dependency failures `waiting`, no backoff, the deadline paused while parked, the dependency check as boundary,
 wakes on every change, an ended dependency breaks), S2 and S3 (`waiting`, woken at every usable value), slice 8's
 last-good rule (dropped when a contribution leaves), §3's destination table (by address; the publication gate), §6 (the
-simultaneous-cycle gap: (A) one narrowed deadline or (B) the probe), §7 (`host.hold`, getters, calls), §21 (no `gone` on
+simultaneous-cycle gap: no probe, `parked_long`), §7 (`host.hold`, getters, calls), §21 (no `gone` on
 removal; a dropped version unbinds only its requests; installs never await activations; rollout without revision
-fields; the reload handover), the start barrier (R17, W6), `FailureCause` (+ `waiting`), `loading`/`failed` with the
-attempt id, one message kind (`probe`, tagged `search` or `check`). Unchanged: what an object's own code reload does (§21), R18 after live,
+fields; the reload handover), the start barrier (R17, W6), `FailureCause` (+ `waiting`), `parked_long`. Unchanged: what an object's own code reload does (§21), R18 after live,
 `retryOn` outside parking, `self.follow`'s R4, the call window and flow control, revocation, no client providers.
 
-## 13. Open for the owner
+## 13. Decisions (owner, 2026-10-29)
 
-1. The barrier: (a) or (b) (§6.3).
-2. Getters on `waiting`: reject at once (recommended) or wait up to `readyTimeout` (§8).
-3. `waiting` as a new cause kind (recommended) or not (§2).
-4. A pure swap whose new factory declares a dependency that is not there: the object parks (its gate closes, holders
-   see `loading` or `failed { waiting }`, calls park or reject; recommended) or stays on the old code until it
-   resolves (old and new code would overlap without bound, against §21's "a host is at R or R−1").
-5. **The last good value** (§9): kept only while every contribution it was built from is still in the table (draft;
-   Astra), or kept as slice 8 decided, with natives in a registry looked up at use through their owner (Sol).
-6. **Cycles across hosts** (§7): (B) the probe, with (B1) a re-search backoff for probes only (recommended) or (B2) a
-   full search lifecycle without any timer; or (A) the slice 4b decision narrowed to one deadline, which polls chains
-   across hosts again, misses a ring of `waiting` attempts, and retries in lockstep without finding the cycle it is for.
+1. The barrier: (a), `load` resolves at the first outcomes of this host's host-lifetime objects (§6.3).
+2. Getters wait through `waiting` until their `readyTimeout`; calls on `failed` still reject (§8).
+3. `waiting` is a new `FailureCause` kind (§2).
+4. A pure swap whose new factory declares a dependency that is not there parks the object (its gate closes; holders
+   see `loading` or `failed { waiting }`; calls park or reject); no overlap of old and new code (§21).
+5. The last good registry value is kept only while every contribution it was built from is still in the table (§9).
+6. Cycles across hosts: no probe; `parked_long` and four authoring rules (§7).
+
+1, 3, 4 and 5 are the recommendations, taken when the owner said "just build this" (2, 6 decided in discussion).

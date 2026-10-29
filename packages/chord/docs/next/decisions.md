@@ -1771,6 +1771,16 @@ validation and copies the v2 kernel added around Delta.
   setups a registry without a value cannot get one before a reload, so a reader then fails at once `transient`
   (`unavailable/undeclared`) and is retried when the registry gets its first value (R18), as `self.get` of a type not
   served here fails at once (refined 2026-10-27 after the second spec review: no `readyTimeout` wait at start); once live, a later failure of the registry changes nothing (last good value).
+- **The dependency model is decided (owner, 2026-10-29: "just build this"):** `packages/chord/docs/next/dependencies/model.md`
+  (explainer `book.md`, `index.html`) as decided, with its remaining four points taken as recommended: (1) the barrier
+  is (a), `load` resolves at the first outcomes of this host's host-lifetime objects (local blockers still in their
+  first attempt are waited for; waits on other hosts or failed dependencies end the first pass); (3) `waiting` is a new
+  `FailureCause` kind; (4) a pure swap whose new factory needs a missing dependency parks the object, no overlap of old
+  and new code; (5) a registry's last good value is kept only while every contribution it was built from is still in
+  the table. Supersedes R18's dependency deadline and backoff, S2's `broken` and S3's backoff, §7's throw for a missing
+  local type and getters' rejection, §21's `gone` on removal and its rollout `updating` deadline, the start barrier's
+  admission gate (holds wait only for the publication). Built as slice 7a (`slice-7a.md`); design.md is folded with
+  the build.
 - **Cycles across hosts: no probe, a diagnostic (owner, 2026-10-29: "yes"; dependency model, decision 6):** cycles stay
   found as today: on one host by the walk over waiting edges at `self.get` (exact), across hosts by the activation chain
   in holds (objects that start one after another). The remaining gap, a ring across hosts whose objects start at the
