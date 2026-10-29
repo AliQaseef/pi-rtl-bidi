@@ -2337,6 +2337,10 @@ Everything else from earlier lists is decided (see the entries above and `packag
 - **Future goal: deploy Chord apps to Cloudflare Durable Objects and similar platforms.** Hot reload there is not
   needed; composition through plugins is (plugin set fixed at deploy). Research in `research/chord-on-durable-objects.md`.
 - Deferred until a concrete case: jobs as objects and where a flow lives (when login is ported); project plugins.
+- **Every object may contribute** (owner, 2026-10-29: "note it down as something to consider for the future; can be
+  changed later without a need for migrations"): lift R21 so objects with params and `remote` objects contribute too;
+  the entry lives while the object is live, its identity is the object's (type, params, principal key); `contribute`
+  on every `self`. Not decided; R21 stands.
 - p3 domain points (decided per domain when p3 is designed): `SessionFiles {session}` (proposed), session delete,
   connection pools, config files with a single writer, file formats as versioned interfaces, the terminal host
   process as a revision artifact.
