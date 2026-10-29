@@ -1771,6 +1771,21 @@ validation and copies the v2 kernel added around Delta.
   setups a registry without a value cannot get one before a reload, so a reader then fails at once `transient`
   (`unavailable/undeclared`) and is retried when the registry gets its first value (R18), as `self.get` of a type not
   served here fails at once (refined 2026-10-27 after the second spec review: no `readyTimeout` wait at start); once live, a later failure of the registry changes nothing (last good value).
+- **Cycles across hosts: no probe, a diagnostic (owner, 2026-10-29: "yes"; dependency model, decision 6):** cycles stay
+  found as today: on one host by the walk over waiting edges at `self.get` (exact), across hosts by the activation chain
+  in holds (objects that start one after another). The remaining gap, a ring across hosts whose objects start at the
+  same moment, is not detected: under the dependency model, which has no dependency deadline, such a ring stays parked.
+  It is made visible: an attempt parked longer than its `readyTimeout` on a remote attempt that is itself only
+  `loading` is reported once per parking episode as `HostError` `parked_long { object, waitingFor, since }`; nothing
+  fails or retries. A cycle is a plugin bug (owner: "if no plugin bug, we don't need it"); the guide's rules for plugin
+  authors and agents: (1) a factory declares only what the object needs, never a type that needs it back; (2)
+  back-references and occasional lookups go into methods and routines (`ctx.get`); (3) data flows up through state and
+  registries, not mutual `self.get`; (4) host-lifetime objects on the server never declare worker types in their
+  factory. Rejected: the probe (edge-chasing searches with a check along the recorded trail, `/tmp/model/review*`,
+  seven review rounds; complete only with a re-search timer or a full search lifecycle, the most intricate code in
+  Chord for a plugin bug) and the slice 4b timeout narrowed (it polls chains across hosts again, misses a ring of
+  waiting attempts, and retries in lockstep without finding the ring). Supersedes slice 4b review decision (2)'s
+  timeout once the dependency model is built (slice 7); folded into design §6 with it.
 - **Getters wait through `waiting` (owner, 2026-10-29: "(b) with a default seems fine; UI stays responsive anyways
   because it usually holds instead of get"; dependency model, decision 2):** `host.get`, `ctx.get` and `host.registry`
   wait while the reference is `loading`, `failed { transient }` or `failed { waiting }`, bounded by their
