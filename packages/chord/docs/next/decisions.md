@@ -1771,6 +1771,14 @@ validation and copies the v2 kernel added around Delta.
   setups a registry without a value cannot get one before a reload, so a reader then fails at once `transient`
   (`unavailable/undeclared`) and is retried when the registry gets its first value (R18), as `self.get` of a type not
   served here fails at once (refined 2026-10-27 after the second spec review: no `readyTimeout` wait at start); once live, a later failure of the registry changes nothing (last good value).
+- **A plugin's npm dependencies are bundled; external only by opt-in (owner, 2026-10-29: "explicit opt in + (a)"):**
+  a plugin's `dependencies` are installed into its own `node_modules` (`npm install --ignore-scripts`) and bundled into
+  each facet that imports them (host packages, its `peerDependencies`, stay external and are passed in). On Node a
+  plugin may keep named packages external with an explicit list in its `package.json` (`"chord": { "external": [...] }`):
+  server and worker facets then load them from the plugin's `node_modules` (`createRequire`, as pi 1.0 loads extension
+  dependencies), native addons included; they stay in Node's module cache until the process ends, so a new version
+  takes effect after a restart. A browser or TUI facet importing an external package fails to build. Slice 7b
+  (the loader).
 - **The dependency model is decided (owner, 2026-10-29: "just build this"):** `packages/chord/docs/next/dependencies/model.md`
   (explainer `book.md`, `index.html`) as decided, with its remaining four points taken as recommended: (1) the barrier
   is (a), `load` resolves at the first outcomes of this host's host-lifetime objects (local blockers still in their
