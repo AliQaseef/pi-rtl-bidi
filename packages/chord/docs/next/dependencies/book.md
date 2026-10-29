@@ -169,11 +169,12 @@ host. For a `remote` type, the consumer computes the address from the params wit
 `hostAddress` function (design §3; `placement` until 2026-10-29): `Notes { session: "S1" }` is placed on `Session { id: "S1" }`. If that is this host's
 address, the request goes here; otherwise over the route for that kind, or over the parent link.
 
-Today the code checks something else first: whether the type is registered here. A type placed on this host but not
-registered yet is sent over the parent link, which is wrong twice. Sol's example: the server has address `Server`,
-the catalog type is placed on `Server`, and no facet serves it yet. Today's `Placement.reference` (`host/placement.ts`) sends the server's
-own request over a parent link the server never had. And when the catalog plugin is installed later, nothing wakes
-that request, because it was never registered as waiting here.
+Until 2026-10-29 the code checked something else first: whether the type is registered here. A type placed on this host but not
+registered yet was sent over the parent link, which is wrong twice. Sol's example: the server has address `Server`,
+the catalog type is placed on `Server`, and no facet serves it yet. That code, `Placement.reference` (`host/placement.ts`, now `host/destination.ts`), sent the server's
+own request over a parent link the server never had, and when the catalog plugin was installed later, nothing woke
+that request, because it was never registered as waiting here. The rename removed the first half; slice 7 builds the
+wait.
 
 :::flow wide | The destination by address. The destination follows from the address alone; only then is the provider found there checked.
 row "Where" accent
@@ -1076,7 +1077,7 @@ The Rule column cites sections of the working document, reproduced in appendix C
 | # | Scenario | Under the model | Today | Rule |
 | --- | --- | --- | --- | --- |
 | 1 | `self.get(NoteStore)` in `Notes { S1 }`'s factory on W1; `NoteStore` is served and activating. | `Notes` makes its request, it binds to the `NoteStore` object, `Notes` parks `loading`. `NoteStore` goes live: a target state change wakes `Notes`, which opens its natives and goes live. No timer ran. | The same wait, bounded by `readyTimeout`; past it `Notes` fails `transient` and backs off (`attempt.ts` `waitFor`). | §3.1, §3.4, §4 |
-| 2 | `self.get(Catalog)` from W1's `ForwardStore`; the parent link is up, S has published, `Catalog` is served there. | The request goes over the parent (placement `Server()`); S binds the hold; `bound` arrives; `ForwardStore` was `loading`, now goes on and live. | The same, after S's whole barrier (`Hold.start` awaits `pendingLoad`). | §1, §2 |
+| 2 | `self.get(Catalog)` from W1's `ForwardStore`; the parent link is up, S has published, `Catalog` is served there. | The request goes over the parent (`hostAddress: () => Server()`); S binds the hold; `bound` arrives; `ForwardStore` was `loading`, now goes on and live. | The same, after S's whole barrier (`Hold.start` awaits `pendingLoad`). | §1, §2 |
 | 3 | The same, but `Catalog`'s plugin is not installed on S. | S indexes the hold `not_served` under "p2.catalog" and answers `failed { waiting, not_served }`; `ForwardStore`'s reference shows `failed { waiting }`, the object parks `failed { waiting, "waiting for p2.catalog: not served" }`. A reload on S serving `Catalog` re-runs the hold: `loading`, `bound`; the reference goes live, the dependent wakes. No backoff, no new hold. | The hold is refused `broken`; `ForwardStore` fails `transient` and re-holds every 1-60 s, refused each time (`remote/hold.ts` `#refuse`, `object.ts` backoff). | §1, §3.1, §4, §5 |
 | 4 | `self.get(SessionInfo)` on W1 when the core facet is missing (same host, not served). | The request is unbound `not_served` on W1 itself; the dependent parks `failed { waiting }`; a reload serving the type binds it and wakes the dependent. | `#assertRoute` throws in the factory: the object is `broken` until `retry()` or a reload (`host.ts` `reference`). | §1, §3.1, §4 |
 | 5 | A tab's `NotesView` declares `Notes { S1 }`; S routes `Session`, `resolve` forks W1, W1 connects and publishes. | The hold waits at T on its path (`no_link` while S resolves: `loading`), is relayed to W1, waits there `unpublished` until W1's setups, then binds; `bound` comes back through the relay. `NotesView` was `loading` the whole time and goes live. | The same chain of waits, each bounded by `readyTimeout`; a slow worker start past it fails the tab object `transient` and polls. | §1, §6.2 |
