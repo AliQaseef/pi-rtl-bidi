@@ -1,8 +1,9 @@
 import type { AutocompleteProvider, AutocompleteSuggestions } from "../autocomplete.ts";
 import {
-	dominantDirection,
+	type BaseDirection,
 	getBidiSettings,
 	hasStrongRtl,
+	lineDirection,
 	reorderLine,
 	reorderLineWithCaret,
 	stepCaretVisual,
@@ -241,6 +242,8 @@ interface LayoutLine {
 	text: string;
 	hasCursor: boolean;
 	cursorPos?: number;
+	/** Reading direction of the logical line this layout line is a slice of. */
+	direction?: BaseDirection;
 }
 
 export interface EditorTheme {
@@ -587,8 +590,8 @@ export class Editor implements Component, Focusable {
 			// and moves the caret to the boundary it precedes in visual order.
 			const painted = hasStrongRtl(layoutLine.text)
 				? layoutLine.hasCursor && layoutLine.cursorPos !== undefined
-					? reorderLineWithCaret(layoutLine.text, layoutLine.cursorPos)
-					: { line: reorderLine(layoutLine.text), caretOffset: undefined }
+					? reorderLineWithCaret(layoutLine.text, layoutLine.cursorPos, layoutLine.direction)
+					: { line: reorderLine(layoutLine.text, layoutLine.direction), caretOffset: undefined }
 				: undefined;
 
 			let displayText = painted ? painted.line : layoutLine.text;
@@ -634,7 +637,7 @@ export class Editor implements Component, Focusable {
 			// caret marker travels with the text, so the hardware cursor still lands on
 			// the grapheme the caret precedes.
 			const padding = " ".repeat(paddingWidth);
-			const hugRight = getBidiSettings().align && dominantDirection(layoutLine.text) === "rtl";
+			const hugRight = getBidiSettings().align && layoutLine.direction === "rtl";
 
 			// Render the line (no side borders, just horizontal lines above and below)
 			result.push(
@@ -702,7 +705,7 @@ export class Editor implements Component, Focusable {
 		// column has to be measured from the edge the text actually starts at.
 		const contentWidth = Math.max(1, event.width - paddingX * 2);
 		const leadingPad =
-			getBidiSettings().align && dominantDirection(logicalLine) === "rtl"
+			getBidiSettings().align && lineDirection(logicalLine) === "rtl"
 				? Math.max(0, contentWidth - visibleWidth(chunk))
 				: 0;
 		const targetColumn = Math.max(0, event.x - paddingX - leadingPad);
@@ -1056,6 +1059,8 @@ export class Editor implements Component, Focusable {
 			const line = this.state.lines[i] || "";
 			const isCurrentLine = i === this.state.cursorLine;
 			const lineVisibleWidth = visibleWidth(line);
+			// Every visual line cut out of one logical line reads the same way.
+			const direction = lineDirection(line);
 
 			if (lineVisibleWidth <= contentWidth) {
 				// Line fits in one layout line
@@ -1064,11 +1069,13 @@ export class Editor implements Component, Focusable {
 						text: line,
 						hasCursor: true,
 						cursorPos: this.state.cursorCol,
+						direction,
 					});
 				} else {
 					layoutLines.push({
 						text: line,
 						hasCursor: false,
+						direction,
 					});
 				}
 			} else {
@@ -1112,11 +1119,13 @@ export class Editor implements Component, Focusable {
 							text: chunk.text,
 							hasCursor: true,
 							cursorPos: adjustedCursorPos,
+							direction,
 						});
 					} else {
 						layoutLines.push({
 							text: chunk.text,
 							hasCursor: false,
+							direction,
 						});
 					}
 				}

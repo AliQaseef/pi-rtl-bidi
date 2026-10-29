@@ -35,6 +35,11 @@ painting layer:
 - Lines without a strong RTL character return unchanged, byte for byte, so English rendering is
   identical to before. Styling and OSC 8 hyperlinks travel with their grapheme; positional escapes
   (cursor movement, the editor cursor marker) are never moved.
+- `lineDirection(line)` decides how a line reads, and both halves of the layout use that one answer:
+  a line that opens in RTL is reordered and aligned RTL; a line that opens in Latin is RTL only when
+  RTL words outnumber Latin ones. UAX #9 alone would order `ask 3 questions (أي بريد يكتب في الـ
+  commit؟)` by its first letter, which puts the Arabic in the wrong order. Words count, not letters,
+  because a command or a path is one word while the sentence around it is many.
 - `configureBidi({ enabled, align })` controls it. The library default is `enabled: true,
   align: false`; the CLI ships `terminal.rtl.enabled: false` and reads the settings files, so RTL
   stays off until the user turns it on. `getBidiSettings()` reports `align` as off whenever

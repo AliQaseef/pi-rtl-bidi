@@ -1,6 +1,6 @@
 import { Marked, type Token, Tokenizer, type TokenizerExtension, type Tokens } from "marked";
 import markedCjkFriendly from "marked-cjk-friendly";
-import { alignRight, dominantDirection, getBidiSettings, hasStrongRtl, reorderLine } from "../bidi.ts";
+import { alignRight, type BaseDirection, getBidiSettings, hasStrongRtl, lineDirection, reorderLine } from "../bidi.ts";
 import { renderLatex } from "../latex.ts";
 import { getCapabilities, hyperlink, isImageLine } from "../terminal-image.ts";
 import type { Component } from "../tui.ts";
@@ -21,9 +21,10 @@ const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\
  * padding that fills it stays part of the line - a background wrapped around the
  * line still covers the whole row.
  */
-function paintVisual(text: string, width: number): string {
-	const visual = reorderLine(text);
-	return getBidiSettings().align && dominantDirection(text) === "rtl" ? alignRight(visual, width) : visual;
+function paintVisual(text: string, width: number, direction?: BaseDirection): string {
+	const base = direction ?? lineDirection(text);
+	const visual = reorderLine(text, base);
+	return getBidiSettings().align && base === "rtl" ? alignRight(visual, width) : visual;
 }
 
 /**
@@ -388,9 +389,13 @@ export class Markdown implements Component {
 		}
 
 		// Wrap lines (NO padding, NO background yet). Wrapping runs on logical text; each
-		// visual line is then reordered separately.
+		// Wrap lines (NO padding, NO background yet). Wrapping runs on logical text; each
+		// visual line is then reordered. The direction belongs to the logical line, not to
+		// the slice the width cut it into: every visual line of one paragraph has to be
+		// ordered and aligned the same way, or a sentence reads two ways at once.
 		const wrappedLines: string[] = [];
 		for (const entry of renderedLines) {
+			const direction = entry.reorderable ? lineDirection(entry.line) : undefined;
 			if (isImageLine(entry.line)) {
 				wrappedLines.push(entry.line);
 			} else {
@@ -399,11 +404,9 @@ export class Markdown implements Component {
 						wrappedLines.push(wrappedLine);
 						continue;
 					}
-					const visual = reorderLine(wrappedLine);
+					const visual = reorderLine(wrappedLine, direction);
 					const aligned =
-						getBidiSettings().align && dominantDirection(wrappedLine) === "rtl"
-							? alignRight(visual, contentWidth)
-							: visual;
+						getBidiSettings().align && direction === "rtl" ? alignRight(visual, contentWidth) : visual;
 					wrappedLines.push(aligned);
 				}
 			}
@@ -699,12 +702,13 @@ export class Markdown implements Component {
 				for (const quoteLine of renderedQuoteLines) {
 					const styledLine = applyQuoteStyle(quoteLine);
 					const wrappedLines = wrapTextWithAnsi(styledLine, quoteContentWidth);
+					const direction = lineDirection(styledLine);
 					for (const wrappedLine of wrappedLines) {
-						if (getBidiSettings().align && dominantDirection(wrappedLine) === "rtl") {
+						if (getBidiSettings().align && direction === "rtl") {
 							// In RTL the quote bar marks the reading edge, so it sits on the right.
-							lines.push(paintVisual(wrappedLine, quoteContentWidth) + this.theme.quoteBorder(" │"));
+							lines.push(paintVisual(wrappedLine, quoteContentWidth, direction) + this.theme.quoteBorder(" │"));
 						} else {
-							lines.push(this.theme.quoteBorder("│ ") + paintVisual(wrappedLine, quoteContentWidth));
+							lines.push(this.theme.quoteBorder("│ ") + paintVisual(wrappedLine, quoteContentWidth, direction));
 						}
 					}
 				}
@@ -897,8 +901,9 @@ export class Markdown implements Component {
 
 				const itemLines = this.renderToken(itemToken, itemWidth, undefined, styleContext);
 				for (const line of itemLines) {
+					const direction = lineDirection(line);
 					for (const wrappedLine of wrapTextWithAnsi(line, itemWidth)) {
-						if (getBidiSettings().align && dominantDirection(wrappedLine) === "rtl") {
+						if (getBidiSettings().align && direction === "rtl") {
 							// The marker marks the reading edge: in RTL it sits at the right and
 							// the item text hangs to its left. Continuation lines keep the same
 							// content edge, inset by the width of the marker.
@@ -908,10 +913,10 @@ export class Markdown implements Component {
 								? " ".repeat(visibleWidth(marker))
 								: this.theme.listBullet(mirroredMarker);
 							const region = Math.max(1, width - visibleWidth(prefix) - visibleWidth(suffix));
-							lines.push(prefix + paintVisual(wrappedLine, region) + suffix);
+							lines.push(prefix + paintVisual(wrappedLine, region, direction) + suffix);
 						} else {
 							const linePrefix = renderedAnyLine ? continuationPrefix : firstPrefix;
-							lines.push(linePrefix + paintVisual(wrappedLine, itemWidth));
+							lines.push(linePrefix + paintVisual(wrappedLine, itemWidth, direction));
 						}
 						renderedAnyLine = true;
 					}
@@ -1087,7 +1092,7 @@ export class Markdown implements Component {
 		const tableText = [token.header, ...token.rows]
 			.map((cells) => cells.map((cell) => cell.text ?? "").join(" "))
 			.join(" ");
-		const rtlTable = getBidiSettings().align && dominantDirection(tableText) === "rtl";
+		const rtlTable = getBidiSettings().align && lineDirection(tableText) === "rtl";
 		if (rtlTable) {
 			token = { ...token, header: [...token.header].reverse(), rows: token.rows.map((row) => [...row].reverse()) };
 			columnWidths = [...columnWidths].reverse();
@@ -1098,16 +1103,19 @@ export class Markdown implements Component {
 		lines.push(`┌─${topBorderCells.join("─┬─")}─┐`);
 
 		// Render header with wrapping
-		const headerCellLines: string[][] = token.header.map((cell, i) => {
+		const headerCells = token.header.map((cell, i) => {
 			const text = this.renderInlineTokens(cell.tokens || [], styleContext);
-			return this.wrapCellText(text, columnWidths[i], styleContext?.stylePrefix);
+			return {
+				lines: this.wrapCellText(text, columnWidths[i], styleContext?.stylePrefix),
+				direction: lineDirection(text),
+			};
 		});
-		const headerLineCount = Math.max(...headerCellLines.map((c) => c.length));
+		const headerLineCount = Math.max(...headerCells.map((c) => c.lines.length));
 
 		for (let lineIdx = 0; lineIdx < headerLineCount; lineIdx++) {
-			const rowParts = headerCellLines.map((cellLines, colIdx) => {
+			const rowParts = headerCells.map((cell, colIdx) => {
 				// Cell content is painted in visual order; the grid and the padding stay put.
-				const text = paintVisual(cellLines[lineIdx] || "", columnWidths[colIdx]);
+				const text = paintVisual(cell.lines[lineIdx] || "", columnWidths[colIdx], cell.direction);
 				const padded = text + " ".repeat(Math.max(0, columnWidths[colIdx] - visibleWidth(text)));
 				return this.theme.bold(padded);
 			});
@@ -1122,15 +1130,18 @@ export class Markdown implements Component {
 		// Render rows with wrapping
 		for (let rowIndex = 0; rowIndex < token.rows.length; rowIndex++) {
 			const row = token.rows[rowIndex];
-			const rowCellLines: string[][] = row.map((cell, i) => {
+			const rowCells = row.map((cell, i) => {
 				const text = this.renderInlineTokens(cell.tokens || [], styleContext);
-				return this.wrapCellText(text, columnWidths[i], styleContext?.stylePrefix);
+				return {
+					lines: this.wrapCellText(text, columnWidths[i], styleContext?.stylePrefix),
+					direction: lineDirection(text),
+				};
 			});
-			const rowLineCount = Math.max(...rowCellLines.map((c) => c.length));
+			const rowLineCount = Math.max(...rowCells.map((c) => c.lines.length));
 
 			for (let lineIdx = 0; lineIdx < rowLineCount; lineIdx++) {
-				const rowParts = rowCellLines.map((cellLines, colIdx) => {
-					const text = paintVisual(cellLines[lineIdx] || "", columnWidths[colIdx]);
+				const rowParts = rowCells.map((cell, colIdx) => {
+					const text = paintVisual(cell.lines[lineIdx] || "", columnWidths[colIdx], cell.direction);
 					return text + " ".repeat(Math.max(0, columnWidths[colIdx] - visibleWidth(text)));
 				});
 				lines.push(`│ ${rowParts.join(" │ ")} │`);

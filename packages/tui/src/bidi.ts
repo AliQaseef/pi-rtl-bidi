@@ -34,12 +34,15 @@ const bidi: Bidi = (bidiModule as unknown as () => Bidi)();
 // caret or the padding in the wrong column.
 const movableEscapeRegex = /^(\x1b\[[0-9;]*m|\x1b\]8;[^;]*;[^\x07\x1b]*(?:\x07|\x1b\\))$/;
 
+// Used to count scripts in a line: styling and hyperlink codes are layout, not text.
+const ansiEscapeRegex = /\x1b\[[0-9;]*[A-Za-z]|\x1b\]8;[^;]*;[^\x07\x1b]*(?:\x07|\x1b\\)/g;
+
 export type BaseDirection = "ltr" | "rtl";
 
 export interface BidiSettings {
 	/** Reorder RTL lines into visual order. Off makes rendering exactly what it was before. */
 	enabled: boolean;
-	/** Move a line to the side its dominant script reads from. Off by default: alignment touches padding, the scrollbar gutter and overlay compositing. */
+	/** Move a line to the edge its reading direction points at. Off by default: alignment touches padding, the scrollbar gutter and overlay compositing. */
 	align: boolean;
 }
 
@@ -112,32 +115,52 @@ export function detectBaseDirection(text: string, forced?: BaseDirection): BaseD
 }
 
 /**
- * Which edge a line should sit against.
+ * Which way a line is read: one rule for both halves of the layout, the order of
+ * the characters inside the line and the edge the line sits against.
  *
- * Direction tells how the characters inside a line are ordered; alignment is a
- * separate question. A line is aligned with the script that dominates it:
- * English stays at the left edge, Arabic goes to the right edge, and a mixed
- * line - "npm install ثم build" - follows whichever script has more strong
- * characters. When the two scripts tie, the first strong character decides, the
- * same rule UAX #9 uses for direction.
+ * UAX #9 takes a paragraph's direction from its first strong character. That is
+ * right for prose and wrong for a terminal line, which usually opens with
+ * something the renderer put there - a tool name, a code span, a list marker -
+ * while the sentence after it is Arabic:
+ *
+ *   ask 3 questions (أي بريد يكتب في الـ commit؟)
+ *
+ * Ordered by its first character that line reads backwards. The rule used here:
+ * a line that opens in RTL is RTL. A line that opens in Latin is RTL only when
+ * RTL words outnumber Latin ones. Words, not characters, because a path or a
+ * command is one word while the sentence around it is many.
  *
  * Undefined means the line has no RTL content at all, so nothing moves.
  */
-export function dominantDirection(text: string): BaseDirection | undefined {
-	if (!hasStrongRtl(text)) return undefined;
+export function lineDirection(text: string, forced?: BaseDirection): BaseDirection | undefined {
+	if (forced) return forced;
+	// Escape codes are layout, not content: the letters in a style code are not
+	// words the reader is reading.
+	const content = text.replace(ansiEscapeRegex, "");
+	if (!rtlScriptRegex.test(content)) return undefined;
 
-	let rtlCount = 0;
-	let ltrCount = 0;
-	for (const { segment } of getGraphemeSegmenter().segment(text)) {
-		const type = bidi.getBidiCharTypeName(segment[0] ?? "");
-		if (type === "R" || type === "AL") rtlCount++;
-		else if (type === "L") ltrCount++;
+	let rtlWords = 0;
+	let ltrWords = 0;
+	let firstStrong: BaseDirection | undefined;
+	for (const token of content.split(/\s+/)) {
+		for (const { segment } of getGraphemeSegmenter().segment(token)) {
+			const type = bidi.getBidiCharTypeName(segment[0] ?? "");
+			if (type === "R" || type === "AL") {
+				if (!firstStrong) firstStrong = "rtl";
+				rtlWords++;
+				break;
+			}
+			if (type === "L") {
+				if (!firstStrong) firstStrong = "ltr";
+				ltrWords++;
+				break;
+			}
+		}
 	}
 
-	if (rtlCount === 0) return undefined;
-	if (rtlCount > ltrCount) return "rtl";
-	if (ltrCount > rtlCount) return "ltr";
-	return detectBaseDirection(text);
+	if (rtlWords === 0) return undefined;
+	if (firstStrong === "rtl") return "rtl";
+	return rtlWords > ltrWords ? "rtl" : "ltr";
 }
 
 // The styling that applies to a grapheme, tracked as attributes rather than as a
@@ -292,6 +315,9 @@ function parseCells(line: string): { cells: Cell[]; trailing: string } {
 /**
  * Resolve embedding levels and return the [maxLevel, minOddLevel] range to
  * reverse. Undefined means the line has no right-to-left run.
+ *
+ * `logical` is the line's characters only, with no escape codes, so the level at
+ * offset N lines up with the cell whose grapheme starts at that offset.
  */
 function resolveLevels(cells: Cell[], logical: string, forced?: BaseDirection): [number, number] | undefined {
 	const levels = bidi.getEmbeddingLevels(logical, forced ?? "auto");
@@ -377,7 +403,8 @@ export function reorderLine(line: string, forced?: BaseDirection): string {
 	const parsed = parseCells(line);
 	if (parsed.cells.length === 0) return line;
 
-	const range = resolveLevels(parsed.cells, parsed.cells.map((cell) => cell.grapheme).join(""), forced);
+	const logical = parsed.cells.map((cell) => cell.grapheme).join("");
+	const range = resolveLevels(parsed.cells, logical, forced ?? lineDirection(logical));
 	if (!range) return line;
 
 	reverseRuns(parsed.cells, range[0], range[1]);
@@ -427,7 +454,8 @@ export function reorderLineWithCaret(
 	const parsed = parseCells(line);
 	if (parsed.cells.length === 0) return undefined;
 
-	const range = resolveLevels(parsed.cells, line, forced);
+	const logical = parsed.cells.map((cell) => cell.grapheme).join("");
+	const range = resolveLevels(parsed.cells, logical, forced ?? lineDirection(logical));
 	if (!range) return undefined;
 
 	const withCaret = insertCaretCell(parsed.cells, boundaryAt(parsed.cells, caretOffset));
@@ -466,7 +494,8 @@ export function stepCaretVisual(
 	const parsed = parseCells(line);
 	if (parsed.cells.length === 0) return undefined;
 
-	const range = resolveLevels(parsed.cells, line, forced);
+	const logical = parsed.cells.map((cell) => cell.grapheme).join("");
+	const range = resolveLevels(parsed.cells, logical, forced ?? lineDirection(logical));
 	if (!range) return undefined;
 
 	const withCaret = insertCaretCell(parsed.cells, boundaryAt(parsed.cells, caretOffset));
