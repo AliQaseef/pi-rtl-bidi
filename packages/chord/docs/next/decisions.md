@@ -1777,8 +1777,10 @@ validation and copies the v2 kernel added around Delta.
   `readyTimeout` (default 60 s; callers choose their own), and reject at the deadline with the last cause; only
   `failed { broken }` rejects at once. Calls stay as they are: on a `loading` reference they park, bounded; on a
   `failed` one (any cause) they reject at once. A UI holds (`host.hold`) and shows `ref.state`; code that needs the
-  object now gets it. Reviewers: Fable (b, calls included), Opus (a, plus a `whenLive` helper), Sol leaning (c, callers
-  park until their own context aborts), Astra pending.
+  object now gets it. Reviewers (`/tmp/model/stw-*.md`): Fable (b, calls included), Opus (a, plus a `whenLive`
+  helper), Sol and Astra (c: callers park until their own context aborts, with caller deadlines and caps on pending
+  calls; (b)'s default deadline is that cap). Sol's p2 note: cleanup in a `finally` after an abort needs its own
+  bounded context, not the aborted one.
 - **Only hosts with an address serve remote types (owner, 2026-10-29: "b"):** a host serving a `remote` type needs an
   address and a principal; `load` refuses a facet that serves one on a host without an address (until now a host with
   a principal but no address served remote types and placed every one of them "here"). So "here" is decided by the
