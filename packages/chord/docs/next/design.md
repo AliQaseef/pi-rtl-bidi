@@ -88,8 +88,9 @@ worker worker worker      addressable by a typed address, started on demand
 | server | yes, one | its own declaration | runs |
 | worker | yes, many | stamped by the parent | started on demand by the app |
 
-Clients serve only `local` types (they are not addressable): a host without a principal refuses to serve a remote type
-(`load` throws; a remote object is owned by a principal of the host serving it; owner, 2026-10-24). No client providers for now (owner,
+Clients serve only `local` types (they are not addressable): a host without a principal or without an address refuses
+to serve a remote type (`load` throws; a remote object is owned by a principal of the host serving it, owner,
+2026-10-24; and placed by its host address, owner, 2026-10-29). No client providers for now (owner,
 2026-10-28): client-side capabilities (a camera, WebMCP tools) go through an owner's requests that clients answer
 (section 20, the Questions service). A client's local
 calls have no principal; what a client calls on the server is stamped with the client's authenticated principal.
@@ -130,7 +131,7 @@ export const Catalog = remote("catalog", { hostAddress: () => Server(), … });
 
   | Case | Goes |
   | --- | --- |
-  | the type is served here and its host address (computed here from the params) is this host's address, or the host has no address | here |
+  | the type is served here and its host address (computed here from the params) is this host's address | here |
   | a reference made here (`host.get`/`hold`, `self.get`, `ctx.get`) to a served type placed on another host | on, as if not served here (next rows): worker S1 reaches `Notes { session: "S2" }` through the parent |
   | an arriving hold for a served type whose params place it on another host | broken `invalid/host_address`; the address the hold names only routes it |
   | the hold names an address of a kind this host has a route for | over that route's link (the address's params checked against the kind, then `authorize`) |
@@ -1797,7 +1798,7 @@ validation, no clone of snapshots or ops.
   | Kind | Direction | Fields |
   | --- | --- | --- |
   | `hello` | both, first | `protocol`, `incarnation`, `calls` (the call window N) |
-  | `hold` | to provider | `origin?`, `hold`, `type`, `version`, `fingerprint`, `params` (part), `address?`, `principal?`, `incarnation?`, `chain?` (activation chain, Q5), `limit?` (decoded size limit, 4b) |
+  | `hold` | to provider | `origin?`, `hold`, `type`, `version`, `fingerprint`, `params` (part), `address`, `principal?`, `incarnation?`, `chain?` (activation chain, Q5), `limit?` (decoded size limit, 4b) |
   | `revoke` | parent to child (route link) | the revocation value (4b) |
   | `release`, `retry` | to provider | `origin?`, `hold` |
   | `call` | to provider | `origin?`, `call`, `hold`, `method` (index), `args?` (part; absent: no arguments), `segments?` |

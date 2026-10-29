@@ -1771,6 +1771,10 @@ validation and copies the v2 kernel added around Delta.
   setups a registry without a value cannot get one before a reload, so a reader then fails at once `transient`
   (`unavailable/undeclared`) and is retried when the registry gets its first value (R18), as `self.get` of a type not
   served here fails at once (refined 2026-10-27 after the second spec review: no `readyTimeout` wait at start); once live, a later failure of the registry changes nothing (last good value).
+- **Only hosts with an address serve remote types (owner, 2026-10-29: "b"):** a host serving a `remote` type needs an
+  address and a principal; `load` refuses a facet that serves one on a host without an address (until now a host with
+  a principal but no address served remote types and placed every one of them "here"). So "here" is decided by the
+  address alone, as the host address of the type. Holds carry their `address` always (required on the wire).
 - **`hostAddress` instead of `placement` (owner, 2026-10-29: "yes, rename"):** the field of a `remote` contract that
   computes where its object lives is `hostAddress: (params) => Address` (it returns the address of the host that serves
   the object, the vocabulary of `createHost({ address })`, routes and holds); supersedes the name of "`placement`, not
