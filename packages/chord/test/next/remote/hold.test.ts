@@ -20,6 +20,8 @@ import {
 	linked,
 	RawPeer,
 	rawLinked,
+	SERVER_ADDRESS,
+	Server,
 	type TestPrincipal,
 	testCodec,
 	transported,
@@ -50,6 +52,7 @@ const N = defineState("n", { schema: obj({ n: int() }), version: 1, initial: () 
 const Halves = remote("app.halves", {
 	version: 1,
 	params: {},
+	hostAddress: () => Server(),
 	variants: { v: { state: { n: obj({ n: int() }), half: int() }, methods: { set: method(int()), wait: method() } } },
 });
 
@@ -91,18 +94,24 @@ async function halves() {
 
 function hold(peer: RawPeer, id: number, Type: { name: string; version: number; fingerprint: string }) {
 	const { name: type, version, fingerprint } = Type;
-	peer.send({ kind: "hold", hold: id, type, version, fingerprint, params: "{}" });
+	peer.send({ kind: "hold", hold: id, type, version, fingerprint, params: "{}", address: SERVER_ADDRESS });
 }
 
 /** The provider object behind a hold, reached through the host's own lookup (to end it by hand). */
 function providerObject(server: unknown) {
 	const host = server as ChordHost<TestPrincipal>;
 	const { name: type, version, fingerprint } = Halves;
-	return host.serving({ type, version, fingerprint, params: "{}" }, {}, { kind: "owner" }, context);
+	const request = { type, version, fingerprint, params: "{}", address: SERVER_ADDRESS };
+	return host.serving(request, {}, { kind: "owner" }, context);
 }
 
 /** A remote type whose activation never completes: its open waits for its abort. */
-const Pending = remote("app.pending", { version: 1, params: {}, variants: { v: { state: { n: int() } } } });
+const Pending = remote("app.pending", {
+	version: 1,
+	params: {},
+	hostAddress: () => Server(),
+	variants: { v: { state: { n: int() } } },
+});
 
 function servePending(h: Parameters<Parameters<typeof rawLinked>[0]>[0]) {
 	h.serve(Pending, (_, _principal, self) => {
@@ -221,7 +230,12 @@ forEachCodec(() => {
 		fakeTimers();
 
 		it("a new hold of an object failed transiently is sent the failure at once", async () => {
-			const Flaky = remote("app.flaky", { version: 1, params: {}, variants: { v: { state: { n: int() } } } });
+			const Flaky = remote("app.flaky", {
+				version: 1,
+				params: {},
+				hostAddress: () => Server(),
+				variants: { v: { state: { n: int() } } },
+			});
 			const { peer } = await rawLinked((h) =>
 				h.serve(Flaky, (_, _principal, self) => {
 					self.open(
@@ -309,6 +323,7 @@ forEachCodec(() => {
 			const Slow = local("app.slow", { version: 1, params: {}, members: { n: int() } });
 			const { server, refs } = await (async () => {
 				const server = createHost<TestPrincipal>({
+					address: Server(),
 					principal: { kind: "server" },
 					readyTimeout: 2_000,
 					onError: () => {},
@@ -343,7 +358,12 @@ forEachCodec(() => {
 });
 
 /** A remote type whose open throws `offline` (broken when `failing.broken`) while `failing.left` is above 0. */
-const Flaky = remote("app.flaky", { version: 1, params: {}, variants: { v: { state: { n: int() } } } });
+const Flaky = remote("app.flaky", {
+	version: 1,
+	params: {},
+	hostAddress: () => Server(),
+	variants: { v: { state: { n: int() } } },
+});
 
 function serveFlaky(h: Parameters<Parameters<typeof rawLinked>[0]>[0], failing: { left: number; broken: boolean }) {
 	h.serve(Flaky, (_, _principal, self) => {
@@ -441,11 +461,13 @@ forEachCodec(() => {
 		const Tally = remote("app.tally", {
 			version: 1,
 			params: {},
+			hostAddress: () => Server(),
 			variants: { v: { state: { n: obj({ n: int() }) }, methods: { bump: method() } } },
 		});
 		const Fresh = remote("app.fresh", {
 			version: 1,
 			params: {},
+			hostAddress: () => Server(),
 			variants: { v: { state: { n: obj({ n: int() }) }, methods: { bump: method() } } },
 		});
 
@@ -521,6 +543,7 @@ forEachCodec(() => {
 const Retiring = remote("app.retiring", {
 	version: 1,
 	params: {},
+	hostAddress: () => Server(),
 	variants: {
 		v: {
 			state: { doc: obj({ n: int() }), big: bool(), t: int() },
@@ -536,7 +559,7 @@ const retiredAll = [RETIRING.state.doc!, RETIRING.state.big!, RETIRING.state.t!]
 
 /** A server serving `Retiring` to a raw peer that acks only when told; `call` calls a method of hold 0. */
 async function retiring() {
-	const server = createHost<TestPrincipal>({ principal: { kind: "server" }, onError: () => {} });
+	const server = createHost<TestPrincipal>({ address: Server(), principal: { kind: "server" }, onError: () => {} });
 	await server.load(
 		[
 			{
@@ -583,7 +606,7 @@ async function retiring() {
 		expect((await peer.next("result")).call).toBe(id);
 	};
 	const { name: type, version, fingerprint } = Retiring;
-	peer.send({ kind: "hold", hold: 0, type, version, fingerprint, params: "{}" });
+	peer.send({ kind: "hold", hold: 0, type, version, fingerprint, params: "{}", address: SERVER_ADDRESS });
 	await peer.next("bound");
 	peer.ack();
 	return { peer, call };

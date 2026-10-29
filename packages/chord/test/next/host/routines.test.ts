@@ -36,6 +36,7 @@ import {
 	loaded,
 	Notes,
 	rawParent,
+	Server,
 	serveNotes,
 	type TestPrincipal,
 	transported,
@@ -789,9 +790,10 @@ describe("on", () => {
 		const Halves = remote("app.halves", {
 			version: 1,
 			params: {},
+			hostAddress: () => Server(),
 			variants: { v: { state: { half: int() }, methods: { set: method(int()) } } },
 		});
-		const server = createHost<TestPrincipal>({ principal: { kind: "server" }, onError: () => {} });
+		const server = createHost<TestPrincipal>({ address: Server(), principal: { kind: "server" }, onError: () => {} });
 		const serve = defineFacet<TestPrincipal>((h) =>
 			h.serve(Halves, (_, _principal, self) => {
 				const doc = self.state(Doc);
@@ -844,7 +846,7 @@ describe("on", () => {
 	});
 
 	it("follows ref.state: a reference over a link going loading and live again", async () => {
-		const server = createHost<TestPrincipal>({ principal: { kind: "server" }, onError: () => {} });
+		const server = createHost<TestPrincipal>({ address: Server(), principal: { kind: "server" }, onError: () => {} });
 		await server.load([{ name: "@test/app", facet: defineFacet<TestPrincipal>((h) => void serveNotes(h)) }], context);
 		const Viewer = local("app.viewer", { version: 1, params: { id: int() }, members: {} });
 		const states: string[] = [];
@@ -1069,7 +1071,12 @@ describe("routines and the end", () => {
 	});
 
 	it("act as a remote object's principal", async () => {
-		const Watcher = remote("app.watcher", { version: 1, params: {}, variants: { v: { state: {} } } });
+		const Watcher = remote("app.watcher", {
+			version: 1,
+			params: {},
+			hostAddress: () => Server(),
+			variants: { v: { state: {} } },
+		});
 		const seen: unknown[] = [];
 		const { client } = await linked(
 			(h) =>

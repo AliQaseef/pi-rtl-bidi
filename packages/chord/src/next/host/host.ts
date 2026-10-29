@@ -48,11 +48,11 @@ import { Activity, type ActivityCounts } from "./activity.ts";
 import { notLive } from "./attempt.ts";
 import { Backoff } from "./backoff.ts";
 import { type Caller, type Ctx, withLinkedAbortSignal } from "./ctx.ts";
+import { Destination, type Placed } from "./destination.ts";
 import { type Facet, type FacetContribution, type ServedEntry, setUp } from "./facet.ts";
 import { contributionOf } from "./members.ts";
 import type { CloseFailed } from "./native.ts";
 import { ChordObject, type Holder, type LocalContract, type RemoteContract, type Served } from "./object.ts";
-import { type Placed, Placement } from "./placement.ts";
 import { type Presence, References } from "./presence.ts";
 import { Binding, type CheckedParams, type Held, type Reference, type Target } from "./reference.ts";
 import { RevocationKeys, type RevokedBy } from "./revocation.ts";
@@ -191,8 +191,8 @@ export interface Host<P extends Principal = Principal, R extends JsonValue = Jso
 	load(facets: readonly { readonly name: string; readonly facet: Facet<P> }[], context: Context): Promise<void>;
 	/**
 	 * A reference once its object is live; waits for `load` first. It acts as the host's principal and goes where its
-	 * type's placement puts it: here, over a route, or over the parent link (`Placement`). A broken failure rejects at
-	 * once; through transient ones it waits until its deadline, then rejects with the last failure's error.
+	 * type's host address puts it: here, over a route, or over the parent link (`Destination`). A broken failure
+	 * rejects at once; through transient ones it waits until its deadline, then rejects with the last failure's error.
 	 */
 	get<C extends Contract>(Type: C, params: ParamsOf<C>, context: Context, options?: GetOptions): Promise<Reference<C>>;
 	/**
@@ -316,7 +316,7 @@ export class ChordHost<P extends Principal = Principal, R extends JsonValue = Js
 	 */
 	readonly unplaced = new Path(() => {});
 	readonly #routes = new Map<string, Route>();
-	readonly #placement: Placement;
+	readonly #destination: Destination;
 	/** The downstream origins this host relays holds for, by their number on upstream links (never reused). */
 	readonly relays = new Map<number, ProviderSide>();
 	#nextOrigin = 1;
@@ -344,7 +344,7 @@ export class ChordHost<P extends Principal = Principal, R extends JsonValue = Js
 		this.#revocationKeys = new RevocationKeys(options.revokedBy as RevokedBy<Principal, JsonValue> | undefined);
 		this.timeouts = { close: options.closeTimeout ?? 30_000, ready: options.readyTimeout ?? 60_000 };
 		this.#heartbeat = { ping: options.heartbeat?.ping ?? 15_000, close: options.heartbeat?.close ?? 30_000 };
-		this.#placement = new Placement(this.address, this.#types, this.#routes, this.#parent);
+		this.#destination = new Destination(this.address, this.#types, this.#routes, this.#parent);
 		// Chord's own: `openStore` made it.
 		this.store = options.store as ChordStore | undefined;
 		this.store?.attach({ failed: (error) => this.#storageFailed(error), batch: this.batch });
@@ -576,13 +576,13 @@ export class ChordHost<P extends Principal = Principal, R extends JsonValue = Js
 	}
 
 	/**
-	 * Binds `binding` to the object for (Type, params) as its principal where its placement puts it (`Placement`): the
-	 * object here, created with its first attempt if there is none, or a remote object held over its path. Throws as
-	 * `Placement.reference` does.
+	 * Binds `binding` to the object for (Type, params) as its principal where its host address puts it (`Destination`):
+	 * the object here, created with its first attempt if there is none, or a remote object held over its path. Throws
+	 * as `Destination.reference` does.
 	 */
 	bind(binding: Binding, Type: Contract, params: CheckedParams, context: Context): Target {
 		const { principal } = binding.caller;
-		const placed = this.#placement.reference(Type, params.params, principal, context);
+		const placed = this.#destination.reference(Type, params.params, principal, context);
 		let target: Target;
 		if (placed.kind === "path") {
 			const { caller, dependent } = binding;
@@ -598,16 +598,16 @@ export class ChordHost<P extends Principal = Principal, R extends JsonValue = Js
 		return target;
 	}
 
-	/** Where a hold arriving on `link` goes (`Placement.hold`); `released` once the host closed. */
+	/** Where a hold arriving on `link` goes (`Destination.hold`); `released` once the host closed. */
 	place(request: HoldRequest, link: HostLink, caller: Caller, context: Context): Placed {
 		this.#assertOpen();
-		return this.#placement.hold(request, link, caller.principal, context);
+		return this.#destination.hold(request, link, caller.principal, context);
 	}
 
 	/**
 	 * The object a hold placed here binds to, acting as `principal`: a remote type served here (otherwise
 	 * `unavailable`) with the hold's version and fingerprint (`contract_mismatch`), valid params, and placed here, its
-	 * placement computed from the params (`invalid/placement`); not an activation the hold's chain waits for
+	 * host address computed from the params (`invalid/host_address`); not an activation the hold's chain waits for
 	 * (`invalid/cycle`, Q5). A new object keeps the hold's chain.
 	 */
 	serving(request: HoldRequest, params: unknown, principal: Principal, context: Context): ChordObject {
@@ -618,7 +618,7 @@ export class ChordHost<P extends Principal = Principal, R extends JsonValue = Js
 		}
 		this.#assertMatch(served, version, fingerprint);
 		const checked = checkParams(served.contract, params, context);
-		this.#placement.assertHere(served.contract, checked.params);
+		this.#destination.assertHere(served.contract, checked.params);
 		const object = this.#object(served, checked, principal, context, chain);
 		const activation = object.activationId;
 		if (activation !== undefined && chain.includes(activation)) throw this.cycle(chain, activation, [object.label]);
@@ -628,11 +628,11 @@ export class ChordHost<P extends Principal = Principal, R extends JsonValue = Js
 	/**
 	 * The path a remote reference of `Type` with `params` acting as `principal` goes over now: `ref.retry()` places a
 	 * reference failed for a part past the limits anew (a route may have forgotten its old path). Throws as
-	 * `Placement.reference` does, and `unavailable` for a type served here now.
+	 * `Destination.reference` does, and `unavailable` for a type served here now.
 	 */
 	pathOf(Type: Contract, params: ParamsOf<Contract>, principal: Principal | undefined): Path {
 		// A retry has no context of its own: its admission checks count on none.
-		const placed = this.#placement.reference(Type, params, principal, BACKGROUND_CONTEXT);
+		const placed = this.#destination.reference(Type, params, principal, BACKGROUND_CONTEXT);
 		if (placed.kind === "path") return placed.path;
 		throw new ChordError({ code: "unavailable", message: `${Type.name} is served here now` });
 	}
@@ -713,8 +713,8 @@ export class ChordHost<P extends Principal = Principal, R extends JsonValue = Js
 
 	/**
 	 * A reference to `Type` made by `caller` for `host.hold` and getters: params checked at once (`invalid/params`,
-	 * also before `load`), where it goes too (`#assertRoute`), then bound (a placement or route that fails fails the
-	 * reference broken); before `load` resolved, where it goes once it did (a host closed meanwhile releases it).
+	 * also before `load`), where it goes too (`#assertRoute`), then bound (a `hostAddress` or route that fails fails
+	 * the reference broken); before `load` resolved, where it goes once it did (a host closed meanwhile releases it).
 	 */
 	#hold(Type: Contract, params: unknown, caller: Caller, context: Context, options: GetOptions): Binding {
 		this.#assertOpen();
@@ -737,8 +737,8 @@ export class ChordHost<P extends Principal = Principal, R extends JsonValue = Js
 	}
 
 	/**
-	 * Binds a reference (`bind`); where it cannot go (`#assertRoute`, a placement or `authorize` that throws or refuses)
-	 * fails it broken, until `ref.retry()` binds it again.
+	 * Binds a reference (`bind`); where it cannot go (`#assertRoute`, a `hostAddress` or `authorize` that throws or
+	 * refuses) fails it broken, until `ref.retry()` binds it again.
 	 */
 	#bindOrFail(binding: Binding, Type: Contract, checked: CheckedParams, context: Context): void {
 		try {
@@ -931,6 +931,10 @@ export class ChordHost<P extends Principal = Principal, R extends JsonValue = Js
 		// A client serves only local types (§3): a remote object is owned by a principal of the host serving it.
 		if (contract.kind === "remote" && this.principal === undefined) {
 			throw new Error(`${contract.name}: a host without a principal serves only local types`);
+		}
+		// A remote object lives on the host its `hostAddress` names: only a host with an address can be that host.
+		if (contract.kind === "remote" && this.address === undefined) {
+			throw new Error(`${contract.name}: a host without an address serves only local types`);
 		}
 		const common = { plugin, provider: bindProvider(contract, {}), linger: options.linger ?? 0 };
 		// The contract's kind decides the factory's signature and the contract's shape.

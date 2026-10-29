@@ -29,6 +29,7 @@ import {
 	memoryStore,
 	Notes,
 	rejection,
+	Server,
 	settledHeap,
 } from "../support.ts";
 
@@ -338,12 +339,13 @@ describe("remote references", () => {
 		const Two = remote("app.two", {
 			version: 1,
 			params: {},
+			hostAddress: () => Server(),
 			variants: { full: { state: { n: int() }, methods: { bump: method() } }, view: { state: { m: int() } } },
 		});
 		const Holder = local("app.holder", { version: 1, params: {}, members: { n: int() } });
 		const seen: unknown[] = [];
 		const owner = { kind: "owner" } as const;
-		const host = createHost<typeof owner>({ principal: owner, onError: () => {} });
+		const host = createHost<typeof owner>({ address: Server(), principal: owner, onError: () => {} });
 		const facet = defineFacet<typeof owner>((h) => {
 			h.serve(Two, () => ({ variant: "view", members: { m: constant(1) } }));
 			h.serve(Holder, (_, self) => {
@@ -369,6 +371,7 @@ describe("remote reference types", () => {
 		const Two = remote("app.two", {
 			version: 1,
 			params: {},
+			hostAddress: () => Server(),
 			variants: { full: { state: { n: int() }, methods: { bump: method() } }, view: { state: { m: int() } } },
 		});
 		type Ref = Reference<typeof Two>;
@@ -384,6 +387,7 @@ describe("remote reference types", () => {
 		const Two = remote("app.two", {
 			version: 1,
 			params: {},
+			hostAddress: () => Server(),
 			variants: { full: { state: { n: int() }, methods: { bump: method() } }, view: { state: { m: int() } } },
 		});
 		expectTypeOf<Held<typeof Two>["variant"]>().toEqualTypeOf<"full" | "view" | undefined>();

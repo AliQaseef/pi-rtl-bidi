@@ -79,7 +79,7 @@ Addressable hosts and routes (slice 4a): a server routes holds of worker types t
 export const Server = hostKind("server");
 export const Session = hostKind("session", { id: str() });
 export const Notes = remote("notes", { version: 1, params: { session: str() },
-	placement: ({ session }) => Session({ id: session }), variants: { … } });
+	hostAddress: ({ session }) => Session({ id: session }), variants: { … } });
 
 const server = createHost<P>({ address: Server(), principal: { kind: "server" }, onError });
 server.route(Session, {                                   // before load, one route per kind
@@ -125,7 +125,8 @@ server.accept(webSocketLink(ws), { principal, limits: { part: 16 * MiB, decoded:
 - `createHost<P, R>({ address?, principal?, principalKey?, telemetry?, onError, closeTimeout?, readyTimeout?,
   heartbeat?, revokedBy?, compression? })`; `R` is the app's revocation type (JSON). `address` (`Session({ id: "S1" })`, see `contracts/`'s `hostKind`) makes the host addressable: it serves only
   objects placed there; without one it is a client. A host with a `principal` acts as it for its own requests; a host
-  without one (a client) has none and serves only local types (`serve` of a remote type throws at `load`).
+  without one (a client) has none. A host serves remote types only with both a principal and an address (`serve` of a
+  remote type throws at `load` otherwise).
   `principalKey` maps a principal
   to its part of an identity (L1's canonical JSON by default; the same function on every host). `closeTimeout` (30 s)
   bounds each native's close and the drain of an ending object's calls; `readyTimeout` (60 s) bounds every activation
@@ -166,7 +167,7 @@ server.accept(webSocketLink(ws), { principal, limits: { part: 16 * MiB, decoded:
   (values, ops, results, arguments; never params, never arguments sent up its parent link) and inflates deflated parts
   it owns in place. Child links refuse compressed parts (a protocol error: clients never send them, and a small part
   could inflate to 64 MiB). Without one (a browser) it sends uncompressed and inflates asynchronously
-  (`DecompressionStream`), only parts it owns once their id and placement are known and their wire size passed,
+  (`DecompressionStream`), only parts it owns once their id and destination are known and their wire size passed,
   within the smaller of its link's decoded limit and a hold's stamped one, holding later messages of the link in
   order; acks go out after a message was applied, so a slow inflate is backpressure like a slow consumer.
 - **Cycles across hosts (Q5):** every object instance gets an instance id (uuidv7) at its first attempt; a new object
@@ -235,17 +236,17 @@ server.accept(webSocketLink(ws), { principal, limits: { part: 16 * MiB, decoded:
   the object activates or retries, while there is no parent link or it is down; `failed` while the object is failed
   and no attempt runs; `live`. Throws at once for invalid params (`invalid/params`) and a local type not served here
   (`unavailable`); before `load` resolved
-  these are decided once it did, and the reference fails `broken` with that error. A placement or `authorize` that
-  throws or refuses, or a placement whose params fail its kind's check (`invalid/placement`), fails the reference
+  these are decided once it did, and the reference fails `broken` with that error. A `hostAddress` or `authorize` that
+  throws or refuses, or a host address whose params fail its kind's check (`invalid/host_address`), fails the reference
   `broken`. A local type never crosses a link. Where a reference made here (`host.get`/`hold`, `self.get`, `ctx.get`)
-  or a hold arriving on a link goes, first match (`Placement`; the address is the contract's `placement` of the params,
+  or a hold arriving on a link goes, first match (`Destination`; the address is the contract's `hostAddress` of the params,
   computed by the caller; a hold carries it to be routed, and a host serving the type computes it again):
 
   | Case | Goes |
   | --- | --- |
-  | the type is served here and its address is this host's, or the host or the type has none | here |
+  | the type is served here and its address is this host's | here |
   | a reference made here to a served type whose address is another host's | on, as if not served here (rows below): worker S1 reaches `Notes { session: "S2" }` through the parent |
-  | an arriving hold for a served type whose params place it on another host | broken `invalid/placement` (misrouted; never forwarded) |
+  | an arriving hold for a served type whose params place it on another host | broken `invalid/host_address` (misrouted; never forwarded) |
   | the address is of a kind this host has a route for | over that route's link (the params checked against the kind, `authorize` first; `forbidden` when it refuses) |
   | otherwise (a remote type) | over the parent link, open yet or not; a hold that arrived *on* the parent link is never sent back: `unavailable` |
   | an arriving hold and no parent link | `unavailable` |
@@ -458,7 +459,7 @@ cycles, throwing factories), `06-natives.ts` (opening in order, `not_ready`, clo
 `08-remote.ts` (two hosts, variants per principal over a shared store, replicas), `09-calls.ts` (calls over a link,
 bytes, errors, `ctx.principal`, cancellation, release), `10-drops.ts` (a hold before any link, `ref.state`, parked
 calls, a drop and the re-hold), `11-linger-and-retry.ts` (`linger`, failed references, `ref.retry()`),
-`12-routes.ts` (addresses, placement, a route to an in-process worker, a guest's `ctx.get` through it),
+`12-routes.ts` (addresses, host addresses, a route to an in-process worker, a guest's `ctx.get` through it),
 `13-relay.ts` (tab, server and a forked worker over WebSocket and IPC, the worker's start data through its core
 facet, §18), `14-flow-control.ts` (a slow tab: folding at the provider, and at the worker per origin through a
 relay while a fast tab keeps receiving), `15-revocation.ts` (a grant revoked: its tabs' links closed, its objects on
@@ -488,8 +489,8 @@ delta)` (the keep-alive counts), `cycle(chain, id, closing)` (the `invalid/cycle
 Inside the directory: `ChordHost` (types, objects by identity, facets, the batch, the backoff map, the endings new
 instances wait for, its links and the heartbeat timer, its routes and the parent path; `reference` checks a
 reference's route, `bind` binds it to an object here or a remote object over a path, `acquire` gets one for a
-caller), `Placement` (where a reference or an arriving hold goes: here, a route's path or the parent's; whether a hold
-served here is placed here), `Route` (one per routed kind: per address its `Path`, at most one running
+caller), `Destination` (where a reference or an arriving hold goes: here, a route's path or the parent's; whether a
+hold served here is placed here), `Route` (one per routed kind: per address its `Path`, at most one running
 `resolve`, the backoff per address; an address is kept while it has holders, a link or a running `resolve`),
 `ChordObject` (one per identity: its state across attempts, holders, retries, cycle checks with its instance id and
 the chain it was created for, lingering, ending and revocation, the count of its running and finishing job runs,

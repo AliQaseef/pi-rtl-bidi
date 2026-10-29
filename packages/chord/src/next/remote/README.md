@@ -83,7 +83,7 @@ within each link's limits, compression at the origin, activation chains and revo
   `state` with A's and B's entries: the derive sees both at once, never A new with B old.
 - `Hold` (one per `hold` served here, a `Holder` of its object): takes its object once `load` resolved; the hold's
   `params` part is parsed then (malformed: a protocol error). A refused type, a mismatch, invalid params, a wrong
-  placement or a snapshot that throws is a broken `failed` that ends it (the provider forgets the id). While pending
+  host address or a snapshot that throws is a broken `failed` that ends it (the provider forgets the id). While pending
   it follows its object's `state`: each failure, transient or broken, is sent as `failed` with `retryIn`, the rest of
   the object's backoff window (absent when broken), the current one at once when the object is failed already; the
   next attempt is announced with `loading`; the hold stays, so a `retry` (from any holder) renews even a broken object
@@ -146,7 +146,7 @@ within each link's limits, compression at the origin, activation chains and revo
   until `retry`; the message's other entries apply. Its call arguments go up a parent link
   uncompressed (the parent may have accepted it as a child). It keeps its
   binding's caller: two references with different principals are two remote objects. Its holds carry the params as a
-  part and the address its placement computed. A `bound` (a first binding, a re-hold; also on a live hold)
+  part and the address its `hostAddress` computed. A `bound` (a first binding, a re-hold; also on a live hold)
   replaces the replicas in the message's batch: members it had get the snapshot as one frame `[["r", value]]` and a
   fresh decoder, members outside a new variant vanish (reads throw `invalid/member`, watches get one `failed` call and
   stay open, derives over them fail; a later binding with the member brings it back as `[["r", value]]`, as on the

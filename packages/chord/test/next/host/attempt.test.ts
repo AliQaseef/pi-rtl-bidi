@@ -21,7 +21,17 @@ import { TableChanges } from "../../../src/next/store/table-changes.ts";
 import { evolveTable } from "../../../src/next/store/table-evolve.ts";
 import { TableHandle } from "../../../src/next/store/table-handle.ts";
 import { prepareTables } from "../../../src/next/store/table-migration.ts";
-import { failures, fakeTimers, flushed, loaded, memoryStore, metered, rejection, tableOwner } from "../support.ts";
+import {
+	failures,
+	fakeTimers,
+	flushed,
+	loaded,
+	memoryStore,
+	metered,
+	rejection,
+	Server,
+	tableOwner,
+} from "../support.ts";
 
 const List = defineState("list", { schema: obj({ items: arr(str()) }), version: 1, initial: () => ({ items: [] }) });
 const Page = local("app.page", { version: 1, params: { id: int() }, members: { label: str(), slow: method() } });
@@ -565,6 +575,7 @@ describe("remote variants", () => {
 	const Two = remote("app.two", {
 		version: 1,
 		params: {},
+		hostAddress: () => Server(),
 		variants: { full: { state: { n: int() }, methods: { bump: method() } }, view: { state: { n: int() } } },
 	});
 	const owner = { kind: "owner" } as const;
@@ -572,7 +583,11 @@ describe("remote variants", () => {
 	/** A host acting as `owner` whose factory for `Two` returns `implementation`. */
 	async function two(implementation: unknown) {
 		const errors: HostError[] = [];
-		const host = createHost<typeof owner>({ principal: owner, onError: (error) => errors.push(error) });
+		const host = createHost<typeof owner>({
+			address: Server(),
+			principal: owner,
+			onError: (error) => errors.push(error),
+		});
 		const facet = defineFacet<typeof owner>((h) => h.serve(Two, () => implementation as never));
 		await host.load([{ name: "@test/app", facet }], context);
 		return { host, errors };

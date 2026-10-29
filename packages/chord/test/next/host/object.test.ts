@@ -26,6 +26,8 @@ import {
 	rejection,
 	relayed,
 	restartable,
+	SERVER_ADDRESS,
+	Server,
 	Session,
 	StoreRestartable,
 	storeRestartable,
@@ -705,14 +707,19 @@ describe("linger", () => {
 /** Every object attempted in this file, weakly: the objects of the cycles among them. */
 const attempted = instancesOf(ChordObject, "attempt");
 
-/** On the server (no placement): its activation holds `Far` on the session's worker. */
-const Near = remote("app.near", { version: 1, params: { session: str() }, variants: { v: { state: { n: int() } } } });
+/** On the server: its activation holds `Far` on the session's worker. */
+const Near = remote("app.near", {
+	version: 1,
+	params: { session: str() },
+	hostAddress: () => Server(),
+	variants: { v: { state: { n: int() } } },
+});
 
 /** On the session's worker: its activation holds `Near` back on the server, or, with `local`, `Middle`. */
 const Far = remote("app.far", {
 	version: 1,
 	params: { session: str() },
-	placement: ({ session }) => Session({ id: session }),
+	hostAddress: ({ session }) => Session({ id: session }),
 	variants: { v: { state: { n: int() } } },
 });
 
@@ -720,6 +727,7 @@ const Far = remote("app.far", {
 const Middle = remote("app.middle", {
 	version: 1,
 	params: { session: str() },
+	hostAddress: () => Server(),
 	variants: { v: { state: { n: int() } } },
 });
 
@@ -730,7 +738,7 @@ const Hub = local("app.hub", { version: 1, params: { session: str() }, members: 
 const Loop = remote("app.loop", {
 	version: 1,
 	params: { here: str(), there: str() },
-	placement: ({ here }) => Session({ id: here }),
+	hostAddress: ({ here }) => Session({ id: here }),
 	variants: { v: { state: { n: int() } } },
 });
 
@@ -910,7 +918,15 @@ function farHold(hold: number): Extract<Message, { kind: "hold" }> {
 /** A hold of `Near` for S1, as a worker sends it to the server. */
 function nearHold(hold: number): Extract<Message, { kind: "hold" }> {
 	const { name: type, version, fingerprint } = Near;
-	return { kind: "hold", hold, type, version, fingerprint, params: jsonPart({ session: "S1" }) };
+	return {
+		kind: "hold",
+		hold,
+		type,
+		version,
+		fingerprint,
+		params: jsonPart({ session: "S1" }),
+		address: SERVER_ADDRESS,
+	};
 }
 
 describe("a failed activation's cleanup (audit)", () => {

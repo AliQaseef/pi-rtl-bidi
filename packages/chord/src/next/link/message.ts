@@ -62,8 +62,8 @@ const MESSAGE = union([
 		version: int({ min: 1 }),
 		fingerprint: str({ pattern: "^[0-9a-f]{16}$" }),
 		params: part,
-		// The address the caller computed (absent for a type without placement).
-		address: opt(address),
+		// The address the caller computed with the type's `hostAddress`: it routes the hold.
+		address,
 		// Whom the hold acts for and the origin's incarnation; read only on a parent link.
 		principal: opt(principal),
 		incarnation: opt(incarnation),

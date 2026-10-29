@@ -19,6 +19,8 @@ import {
 	rawParent,
 	rawWorkers,
 	relayed,
+	SERVER_ADDRESS,
+	Server,
 	Session,
 	serveNotes,
 	type TestPrincipal,
@@ -50,9 +52,10 @@ const Barrier = local("app.barrier", { version: 1, params: {}, members: { n: int
 /** A guest's variant: its `wait` method's index. */
 const { wait } = wireNames(Notes, "reader").methods as { wait: number };
 
-/** A worker of session S1 serving `Notes` (as `serveNotes`), its parent a raw peer whose holds name their principal. */
+/** A worker of session S1 serving `Notes` (as `serveNotes`, at the address `Notes` names), its parent a raw peer whose holds name their principal. */
 async function worker(setup: (host: FacetHost<TestPrincipal>) => void = (h) => void serveNotes(h)) {
 	const host = createHost<TestPrincipal, Revocation>({
+		address: Server(),
 		principal: { kind: "worker", session: "S1" },
 		revokedBy,
 		onError: () => {},
@@ -71,6 +74,7 @@ function holdAs(peer: RawPeer, hold: number, principal: TestPrincipal, Type: typ
 		version: Type.version,
 		fingerprint: Type.fingerprint,
 		params: jsonPart({ session: "S1" }),
+		address: SERVER_ADDRESS,
 		principal,
 	});
 }
@@ -79,6 +83,7 @@ describe("revocation keys", () => {
 	it("are computed once per principal object, compared as canonical JSON", async () => {
 		let calls = 0;
 		const host = createHost<TestPrincipal, { a: number; b: number }>({
+			address: Server(),
 			principal: { kind: "server" },
 			revokedBy: () => {
 				calls++;
@@ -103,6 +108,7 @@ describe("revocation keys", () => {
 	it("keep no principal alive (a WeakMap keyed by the principal the host cached them for)", async () => {
 		const cached: WeakRef<TestPrincipal>[] = [];
 		const host = createHost<TestPrincipal, Revocation>({
+			address: Server(),
 			principal: { kind: "worker", session: "S1" },
 			revokedBy: (principal) => {
 				// The principal decoded on this host, the cache's key: not the sender's object.
@@ -172,7 +178,12 @@ forEachCodec(() => {
 		});
 
 		it("abandons an activation in progress (race 1): its open's context is aborted, its holders get gone", async () => {
-			const Slow = remote("app.slow", { version: 1, params: {}, variants: { v: { state: { n: int() } } } });
+			const Slow = remote("app.slow", {
+				version: 1,
+				params: {},
+				hostAddress: () => Server(),
+				variants: { v: { state: { n: int() } } },
+			});
 			const aborted: unknown[] = [];
 			const { host, parent } = await worker((h) =>
 				h.serve(Slow, (_, _principal, self) => {
@@ -196,6 +207,7 @@ forEachCodec(() => {
 				version: Slow.version,
 				fingerprint: Slow.fingerprint,
 				params: "{}",
+				address: SERVER_ADDRESS,
 				principal: S1,
 			});
 			await transported();
@@ -217,6 +229,7 @@ forEachCodec(() => {
 				// A worker connects before it loads (W6); a load can wait for an activation (the start barrier).
 				const opened = Promise.withResolvers<void>();
 				const host = createHost<TestPrincipal, Revocation>({
+					address: Server(),
 					principal: { kind: "worker", session: "S1" },
 					revokedBy,
 					onError: () => {},
@@ -313,6 +326,7 @@ forEachCodec(() => {
 	describe("links and revoke messages", () => {
 		it("closes the child links whose principal it revokes, never the parent link", async () => {
 			const host = createHost<TestPrincipal, Revocation>({
+				address: Server(),
 				principal: { kind: "server" },
 				revokedBy,
 				onError: () => {},
@@ -336,6 +350,7 @@ forEachCodec(() => {
 
 		it("ignores a revoke from a child link (race 6)", async () => {
 			const host = createHost<TestPrincipal, Revocation>({
+				address: Server(),
 				principal: { kind: "server" },
 				revokedBy,
 				onError: () => {},

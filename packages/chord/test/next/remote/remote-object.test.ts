@@ -35,6 +35,7 @@ import {
 	rawParent,
 	rawProvider,
 	rejection,
+	Server,
 	serveNotes,
 	type TestPrincipal,
 	testCodec,
@@ -48,7 +49,12 @@ const Counter = defineState("counter", { schema: obj({ n: int() }), version: 1, 
 forEachCodec(() => {
 	describe("a hold over the parent link", () => {
 		it("reject a broken failure at once", async () => {
-			const Broken = remote("app.broken", { version: 1, params: {}, variants: { v: { state: { n: int() } } } });
+			const Broken = remote("app.broken", {
+				version: 1,
+				params: {},
+				hostAddress: () => Server(),
+				variants: { v: { state: { n: int() } } },
+			});
 			const { client } = await linked((h) =>
 				h.serve(Broken, () => {
 					throw new Error("factory threw");
@@ -197,6 +203,7 @@ forEachCodec(() => {
 			const Flaky = remote("app.flaky", {
 				version: 1,
 				params: { id: int() },
+				hostAddress: () => Server(),
 				variants: { v: { state: { n: int() } } },
 			});
 			const opens: string[] = [];
@@ -250,6 +257,7 @@ forEachCodec(() => {
 			const Halves = remote("app.halves", {
 				version: 1,
 				params: {},
+				hostAddress: () => Server(),
 				variants: { v: { state: { half: int() }, methods: { set: method(int()) } } },
 			});
 			const { server, client } = await linked((h) =>
@@ -363,7 +371,12 @@ forEachCodec(() => {
 		fakeTimers();
 
 		it("fails at once with the real cause when its load holds it (no wait for a timeout)", async () => {
-			const Flaky = remote("app.flaky", { version: 1, params: {}, variants: { v: { state: { n: int() } } } });
+			const Flaky = remote("app.flaky", {
+				version: 1,
+				params: {},
+				hostAddress: () => Server(),
+				variants: { v: { state: { n: int() } } },
+			});
 			const View = local("app.view", { version: 1, params: {}, members: { n: int() } });
 			const { server, client: first } = await linked((h) =>
 				h.serve(Flaky, (_, _principal, self) => {
@@ -406,6 +419,7 @@ forEachCodec(() => {
 const Shifting = remote("app.shifting", {
 	version: 1,
 	params: {},
+	hostAddress: () => Server(),
 	variants: {
 		a: { state: { x: int(), y: int() }, methods: { m: method() } },
 		b: { state: { y: int(), z: int() } },
@@ -592,10 +606,15 @@ forEachCodec(() => {
 			const NotesV2 = remote("app.notes", {
 				version: 2,
 				params: { session: str() },
+				hostAddress: () => Server(),
 				variants: { editor: { state: { count: int() } } },
 			});
 			const { server, client, links } = await linked((h) => void serveNotes(h));
-			const upgraded = createHost<TestPrincipal>({ principal: { kind: "server" }, onError: () => {} });
+			const upgraded = createHost<TestPrincipal>({
+				address: Server(),
+				principal: { kind: "server" },
+				onError: () => {},
+			});
 			const facet = defineFacet<TestPrincipal>((h) =>
 				h.serve(NotesV2, () => ({ variant: "editor", members: { count: constant(0) } })),
 			);
@@ -644,6 +663,7 @@ forEachCodec(() => {
 			const Flaky = remote("app.flaky", {
 				version: 1,
 				params: {},
+				hostAddress: () => Server(),
 				variants: { only: { state: {}, methods: { ping: method() } } },
 			});
 			let factories = 0;

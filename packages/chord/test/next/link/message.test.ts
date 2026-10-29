@@ -21,12 +21,23 @@ function partText(part: Part): Part {
 }
 
 const incarnation = "0190f5a2-7c3e-7d4a-9b1c-2d3e4f5a6b7c";
+
+/** The address a hold names: `Server()` on the wire. */
+const server = { kind: "server", params: {} };
 const error = { kind: "chord", error: { code: "released", message: "gone" } } as const;
 
 /** One message of every kind, with the optional fields both present and absent; parts are JSON text. */
 const EVERY_KIND: Message[] = [
 	{ kind: "hello", protocol: 1, incarnation, calls: 256 },
-	{ kind: "hold", hold: 300, type: "app.notes", version: 2, fingerprint: "0123456789abcdef", params: '{"id":1}' },
+	{
+		kind: "hold",
+		hold: 300,
+		type: "app.notes",
+		version: 2,
+		fingerprint: "0123456789abcdef",
+		params: '{"id":1}',
+		address: server,
+	},
 	{
 		kind: "hold",
 		hold: 1,
@@ -45,6 +56,7 @@ const EVERY_KIND: Message[] = [
 		version: 1,
 		fingerprint: "0123456789abcdef",
 		params: "{}",
+		address: server,
 		incarnation,
 	},
 	{ kind: "release", hold: 0 },
@@ -106,7 +118,16 @@ const EVERY_KIND: Message[] = [
 	{ kind: "ack" },
 	{ kind: "ack", origin: 1 },
 	{ kind: "closed", origin: 300 },
-	{ kind: "hold", origin: 2, hold: 0, type: "t", version: 1, fingerprint: "0123456789abcdef", params: "{}" },
+	{
+		kind: "hold",
+		origin: 2,
+		hold: 0,
+		type: "t",
+		version: 1,
+		fingerprint: "0123456789abcdef",
+		params: "{}",
+		address: server,
+	},
 	{ kind: "release", origin: 2, hold: 3 },
 	{ kind: "call", origin: 2, call: 1, hold: 3, method: 0, args: "[1]" },
 	{ kind: "abort", origin: 2, call: 1 },
@@ -130,10 +151,20 @@ const EVERY_KIND: Message[] = [
 		version: 1,
 		fingerprint: "0123456789abcdef",
 		params: "{}",
+		address: server,
 		chain: [incarnation, incarnation],
 		limit: 65_536,
 	},
-	{ kind: "hold", hold: 4, type: "t", version: 1, fingerprint: "0123456789abcdef", params: "{}", limit: 0 },
+	{
+		kind: "hold",
+		hold: 4,
+		type: "t",
+		version: 1,
+		fingerprint: "0123456789abcdef",
+		params: "{}",
+		address: server,
+		limit: 0,
+	},
 	{ kind: "revoke", revocation: { grant: "g1" } },
 	{ kind: "ping" },
 	{ kind: "pong" },
@@ -181,7 +212,15 @@ forEachCodec(() => {
 			const codec = testCodec();
 			const deflated = () => new DeflatedPart(new Uint8Array([0, 1, 2, 255]));
 			const messages: Message[] = [
-				{ kind: "hold", hold: 0, type: "t", version: 1, fingerprint: "0123456789abcdef", params: deflated() },
+				{
+					kind: "hold",
+					hold: 0,
+					type: "t",
+					version: 1,
+					fingerprint: "0123456789abcdef",
+					params: deflated(),
+					address: server,
+				},
 				{ kind: "call", call: 0, hold: 0, method: 0, args: deflated() },
 				{ kind: "result", call: 0, value: deflated(), segments: [new Uint8Array([7])] },
 				{
@@ -253,6 +292,7 @@ forEachCodec(() => {
 				version: 1,
 				fingerprint: "0123456789abcdef",
 				params: jsonPart({ "\uFEFFkey": "\uFEFFvalue" }),
+				address: server,
 			};
 			const decoded = codec.decode(codec.encode(message)) as Extract<Message, { kind: "hold" }>;
 			expect(plain(decoded)).toEqual(message);
@@ -283,9 +323,10 @@ describe("the binary codec", () => {
 			version: 1,
 			fingerprint: "0123456789abcdef",
 			params: "{}",
+			address: server,
 		});
-		// kind, id, type, version, fingerprint, params, the optional fields' flags
-		expect(hold).toHaveLength(1 + 1 + 2 + 1 + 8 + 3 + 1);
+		// kind, id, type, version, fingerprint, params, the address's kind and params, the optional fields' flags
+		expect(hold).toHaveLength(1 + 1 + 2 + 1 + 8 + 3 + 7 + 3 + 1);
 		expect([...binaryCodec.encode({ kind: "ack" })]).toEqual([13]);
 		// An origin: the kind byte's high bit, then the origin as a varint.
 		expect([...binaryCodec.encode({ kind: "ack", origin: 300 })]).toEqual([13 | 0x80, 0xac, 0x02]);
@@ -345,6 +386,7 @@ describe("the binary codec", () => {
 			version: 1,
 			fingerprint: "0123456789abcdef",
 			params: "{}",
+			address: server,
 		});
 		const forged = hold.slice();
 		forged[forged.length - 1] = 32;
@@ -446,10 +488,12 @@ describe("the text codec", () => {
 			version: 1,
 			fingerprint: "0123456789abcdef",
 			params: "{}",
+			address: server,
 		} as const;
-		expect(text(hold)).toBe('["H",0,"t",1,"0123456789abcdef",[0,{}]]');
-		expect(text({ ...hold, incarnation })).toBe(`["H",0,"t",1,"0123456789abcdef",[0,{}],null,null,"${incarnation}"]`);
-		expect(text({ ...hold, limit: 5 })).toBe('["H",0,"t",1,"0123456789abcdef",[0,{}],null,null,null,null,5]');
+		const head = '["H",0,"t",1,"0123456789abcdef",[0,{}],["server",{}]';
+		expect(text(hold)).toBe(`${head}]`);
+		expect(text({ ...hold, incarnation })).toBe(`${head},null,"${incarnation}"]`);
+		expect(text({ ...hold, limit: 5 })).toBe(`${head},null,null,null,5]`);
 	});
 
 	it("puts byte segments after the tuple and a newline, their lengths the tuple's last field", () => {
@@ -473,6 +517,15 @@ describe("the text codec", () => {
 		);
 		expect(() => textCodec.decode(new TextEncoder().encode('["@",1,["@",2,["a"]]]'))).toThrow("wraps one message");
 		expect(() => textCodec.decode(new TextEncoder().encode('["@",1]'))).toThrow("wraps one message");
+	});
+
+	it("refuses a hold without its address: every hold names one", () => {
+		const decode = (tuple: string) => textCodec.decode(new TextEncoder().encode(tuple));
+		expect(() => decode('["H",0,"t",1,"0123456789abcdef",[0,{}]]')).toThrow('a "H" message with 5 fields');
+		expect(() => decode('["H",0,"t",1,"0123456789abcdef",[0,{}],null]')).toThrow("expected a list");
+		expect(() => decode('["H",0,"t",1,"0123456789abcdef",[0,{}],["server"]]')).toThrow("an address is a pair");
+		const hold = { kind: "hold", hold: 0, type: "t", version: 1, fingerprint: "0123456789abcdef", params: "{}" };
+		expect(() => checkMessage(hold, context)).toThrow("message schema");
 	});
 });
 
@@ -534,6 +587,7 @@ describe("the binary codec's short strings", () => {
 			version: 1,
 			fingerprint: "0123456789abcdef",
 			params: jsonPart(type),
+			address: server,
 		};
 		expect(plain(binaryCodec.decode(binaryCodec.encode(message)))).toEqual(message);
 	});

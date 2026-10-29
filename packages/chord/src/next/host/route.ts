@@ -63,7 +63,7 @@ export class Route {
 
 	/**
 	 * The path to the address with `params`, for a hold acting as `principal`: the params checked against the kind
-	 * (`invalid/placement`), then `authorize` (`forbidden` when it refuses; a throw is the hold's failure).
+	 * (`invalid/host_address`), then `authorize` (`forbidden` when it refuses; a throw is the hold's failure).
 	 */
 	path(params: unknown, principal: Principal | undefined, context: Context): Path {
 		const address = checkAddress(this.kind, this.#params, params, context);

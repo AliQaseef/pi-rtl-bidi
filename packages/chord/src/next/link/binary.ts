@@ -50,15 +50,13 @@ const PRESENT = 1;
 const SEGMENTS = 2;
 
 /** A hold's optional fields, one bit each. */
-const ADDRESS = 1;
+const PRINCIPAL = 1;
 
-const PRINCIPAL = 2;
+const INCARNATION = 2;
 
-const INCARNATION = 4;
+const CHAIN = 4;
 
-const CHAIN = 8;
-
-const LIMIT = 16;
+const LIMIT = 8;
 
 /** A part's length prefix is its length doubled, plus one when the part is deflated. */
 const DEFLATED = 1;
@@ -106,17 +104,14 @@ function encodeFields(message: Message, writer: Writer): void {
 			writer.raw(hex(message.fingerprint, 8));
 			writer.part(message.params);
 			const { address, principal, incarnation, chain, limit } = message;
+			writer.string(address.kind);
+			writer.json(address.params);
 			writer.byte(
-				(address === undefined ? 0 : ADDRESS) |
-					(principal === undefined ? 0 : PRINCIPAL) |
+				(principal === undefined ? 0 : PRINCIPAL) |
 					(incarnation === undefined ? 0 : INCARNATION) |
 					(chain === undefined ? 0 : CHAIN) |
 					(limit === undefined ? 0 : LIMIT),
 			);
-			if (address !== undefined) {
-				writer.string(address.kind);
-				writer.json(address.params);
-			}
 			if (principal !== undefined) writer.json(principal);
 			if (incarnation !== undefined) writer.raw(hex(incarnation.replaceAll("-", ""), 16));
 			if (chain !== undefined) {
@@ -207,9 +202,9 @@ function decodeFields(kind: (typeof KINDS)[number], reader: Reader): Message {
 			const version = reader.varint();
 			const fingerprint = hexText(reader.raw(8));
 			const params = reader.part();
+			const address = { kind: reader.string(), params: reader.json() };
 			const flags = reader.byte();
-			if (flags > (ADDRESS | PRINCIPAL | INCARNATION | CHAIN | LIMIT)) throw new Error("binary: unknown hold flags");
-			const address = flags & ADDRESS ? { address: { kind: reader.string(), params: reader.json() } } : {};
+			if (flags > (PRINCIPAL | INCARNATION | CHAIN | LIMIT)) throw new Error("binary: unknown hold flags");
 			const principal = flags & PRINCIPAL ? { principal: reader.json() as { kind: string } } : {};
 			const incarnation = flags & INCARNATION ? { incarnation: uuid(reader.raw(16)) } : {};
 			const chain = flags & CHAIN ? { chain: reader.list(() => uuid(reader.raw(16))) } : {};
@@ -221,7 +216,7 @@ function decodeFields(kind: (typeof KINDS)[number], reader: Reader): Message {
 				version,
 				fingerprint,
 				params,
-				...address,
+				address,
 				...principal,
 				...incarnation,
 				...chain,

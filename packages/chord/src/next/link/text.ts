@@ -75,16 +75,10 @@ function ownTuple(message: Message): string {
 			const { address, principal, incarnation, chain, limit } = message;
 			const head = json(["H", message.hold, message.type, message.version, message.fingerprint]).slice(0, -1);
 			// Optional trailing fields: an absent one in the middle is null, absent ones at the end are left out.
-			const optional = [
-				address === undefined ? null : [address.kind, address.params],
-				principal ?? null,
-				incarnation ?? null,
-				chain ?? null,
-				limit ?? null,
-			];
+			const optional = [principal ?? null, incarnation ?? null, chain ?? null, limit ?? null];
 			while (optional.length > 0 && optional.at(-1) === null) optional.pop();
 			const rest = optional.map((field) => `,${json(field)}`).join("");
-			return `${head},${partText(message.params)}${rest}]`;
+			return `${head},${partText(message.params)},${json([address.kind, address.params])}${rest}]`;
 		}
 		case "release":
 			return json(["R", message.hold]);
@@ -188,14 +182,10 @@ function fromFields(fields: unknown[], rest: Uint8Array): Message {
 			arity(3);
 			return { kind: "hello", protocol: field(0), incarnation: field(1), calls: field(2) };
 		case "H": {
-			arity(5, 6, 7, 8, 9, 10);
-			const [address, principal, incarnation, chain, limit] = [5, 6, 7, 8, 9].map((index) => f[index] ?? null);
-			let wireAddress = {};
-			if (address !== null) {
-				const pair = list(address);
-				if (pair.length !== 2) throw new Error("text: an address is a pair");
-				wireAddress = { address: { kind: pair[0], params: pair[1] } };
-			}
+			arity(6, 7, 8, 9, 10);
+			const address = list(f[5]);
+			if (address.length !== 2) throw new Error("text: an address is a pair");
+			const [principal, incarnation, chain, limit] = [6, 7, 8, 9].map((index) => f[index] ?? null);
 			return {
 				kind: "hold",
 				hold: field(0),
@@ -203,7 +193,7 @@ function fromFields(fields: unknown[], rest: Uint8Array): Message {
 				version: field(2),
 				fingerprint: field(3),
 				params: textPart(f[4]),
-				...wireAddress,
+				address: { kind: address[0] as string, params: address[1] },
 				...(principal === null ? {} : { principal: principal as { kind: string } }),
 				...(incarnation === null ? {} : { incarnation: incarnation as string }),
 				...(chain === null ? {} : { chain: chain as string[] }),

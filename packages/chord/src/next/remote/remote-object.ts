@@ -86,7 +86,7 @@ export class RemoteObject implements Target {
 		host: AnyHost,
 		contract: Contract,
 		{ params, key }: CheckedParams,
-		address: WireAddress | undefined,
+		address: WireAddress,
 		caller: Caller,
 		path: Path,
 		dependent: ChordObject | undefined,
@@ -100,7 +100,7 @@ export class RemoteObject implements Target {
 			version,
 			fingerprint,
 			params: jsonPart(params),
-			...(address === undefined ? {} : { address }),
+			address,
 		};
 		this.caller = caller;
 		this.#params = params;
@@ -216,7 +216,7 @@ export class RemoteObject implements Target {
 	/**
 	 * `ref.retry()`: a failed object's provider is asked for an attempt (a hold it refused is started there again). One
 	 * that failed for a part past the link's limits is placed anew and held with a new id, now or on its path's next
-	 * link (a placement that throws fails it broken again).
+	 * link (a `hostAddress` that throws fails it broken again).
 	 */
 	retry(): void {
 		if (this.#state.kind !== "failed") return;
@@ -227,7 +227,7 @@ export class RemoteObject implements Target {
 		this.#hold?.side.retry(this.#hold.id);
 	}
 
-	/** Places a reference whose part was past the limits anew, on its path now (a placement that throws fails it). */
+	/** Places a reference whose part was past the limits anew, on its path now (a throwing `hostAddress` fails it). */
 	#place(): void {
 		let path: Path;
 		try {

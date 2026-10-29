@@ -21,6 +21,8 @@ import {
 	RAW_PEER,
 	RawPeer,
 	rawLinked,
+	SERVER_ADDRESS,
+	Server,
 	serveNotes,
 	type TestPrincipal,
 	testCodec,
@@ -39,7 +41,16 @@ function hold(
 ) {
 	const { name: type, version, fingerprint } = { ...Type, ...override };
 	const from = origin === undefined ? {} : { origin };
-	peer.send({ kind: "hold", ...from, hold: id, type, version, fingerprint, params: jsonPart(params) });
+	peer.send({
+		kind: "hold",
+		...from,
+		hold: id,
+		type,
+		version,
+		fingerprint,
+		params: jsonPart(params),
+		address: SERVER_ADDRESS,
+	});
 }
 
 /** Sends a call of the method at index `method` of the bound variant, with `args` (none when left out). */
@@ -50,7 +61,12 @@ function call(peer: RawPeer, id: number, holdId: number, method: number, args?: 
 }
 
 /** A remote type kept per id. */
-const Kept = remote("app.kept", { version: 1, params: { id: int() }, variants: { v: { state: { n: int() } } } });
+const Kept = remote("app.kept", {
+	version: 1,
+	params: { id: int() },
+	hostAddress: () => Server(),
+	variants: { v: { state: { n: int() } } },
+});
 
 /** The wire's indexes of `Notes`'s reader variant. */
 const READER = wireNames(Notes, "reader");
@@ -120,7 +136,11 @@ forEachCodec(() => {
 		});
 
 		it("arriving before load resolved wait for it", async () => {
-			const server = createHost<TestPrincipal>({ principal: { kind: "server" }, onError: () => {} });
+			const server = createHost<TestPrincipal>({
+				address: Server(),
+				principal: { kind: "server" },
+				onError: () => {},
+			});
 			const [a, b] = memoryLinkPair();
 			server.accept(a, { principal: { kind: "owner" }, codec: testCodec() }, context);
 			const peer = new RawPeer(b);
@@ -177,7 +197,12 @@ forEachCodec(() => {
 		});
 
 		it("before bound are refused not_ready (race 3)", async () => {
-			const Slow = remote("app.slow", { version: 1, params: {}, variants: { v: { state: { n: int() } } } });
+			const Slow = remote("app.slow", {
+				version: 1,
+				params: {},
+				hostAddress: () => Server(),
+				variants: { v: { state: { n: int() } } },
+			});
 			const { peer } = await rawLinked((h) =>
 				h.serve(Slow, (_, _principal, self) => {
 					self.open(
@@ -333,7 +358,11 @@ forEachCodec(() => {
 
 		it("a hold released while it waits for load takes nothing once load resolves", async () => {
 			const events: string[] = [];
-			const server = createHost<TestPrincipal>({ principal: { kind: "server" }, onError: () => {} });
+			const server = createHost<TestPrincipal>({
+				address: Server(),
+				principal: { kind: "server" },
+				onError: () => {},
+			});
 			const [a, b] = memoryLinkPair();
 			server.accept(a, { principal: { kind: "owner" }, codec: testCodec() }, context);
 			const peer = new RawPeer(b);
@@ -354,6 +383,7 @@ forEachCodec(() => {
 			const Slow = remote("app.slow", {
 				version: 1,
 				params: { id: int() },
+				hostAddress: () => Server(),
 				variants: { v: { state: { n: int() } } },
 			});
 			const aborted: string[] = [];
@@ -381,6 +411,7 @@ forEachCodec(() => {
 			const Closing = remote("app.closing", {
 				version: 1,
 				params: { id: int() },
+				hostAddress: () => Server(),
 				variants: { v: { state: { n: int() } } },
 			});
 			const events: string[] = [];
@@ -429,6 +460,7 @@ forEachCodec(() => {
 			const Counter = remote("app.counter", {
 				version: 1,
 				params: { id: int() },
+				hostAddress: () => Server(),
 				variants: { v: { state: { n: int(), seen: int() }, methods: { bump: method() } } },
 			});
 			const N = defineState("n", { schema: obj({ n: int() }), version: 1, initial: () => ({ n: 0 }) });
@@ -488,6 +520,7 @@ forEachCodec(() => {
 const Grid = remote("app.grid", {
 	version: 1,
 	params: {},
+	hostAddress: () => Server(),
 	variants: {
 		v: {
 			state: { grid: obj({ cells: map(int()) }), one: int() },
@@ -520,7 +553,7 @@ function serveGrid(h: FacetHost<TestPrincipal>): void {
 /** A server serving `Notes` and `Grid` to a raw peer that acks only when told, the link's context counting. */
 async function slowConsumer() {
 	const counting = await metered();
-	const server = createHost<TestPrincipal>({ principal: { kind: "server" }, onError: () => {} });
+	const server = createHost<TestPrincipal>({ address: Server(), principal: { kind: "server" }, onError: () => {} });
 	await server.load(
 		[
 			{
@@ -729,7 +762,12 @@ forEachCodec(() => {
 		});
 
 		it("carry constants and failed members, and an empty variant's binding, in a first bound (race 24)", async () => {
-			const Empty = remote("app.empty", { version: 1, params: {}, variants: { v: {} } });
+			const Empty = remote("app.empty", {
+				version: 1,
+				params: {},
+				hostAddress: () => Server(),
+				variants: { v: {} },
+			});
 			const N = defineState("n", { schema: obj({ n: int() }), version: 1, initial: () => ({ n: 0 }) });
 			const { peer } = await rawLinked((h) => {
 				h.serve(Empty, () => ({ variant: "v", members: {} }));
@@ -836,6 +874,7 @@ forEachCodec(() => {
 const Halves = remote("app.halves", {
 	version: 1,
 	params: {},
+	hostAddress: () => Server(),
 	variants: { v: { state: { one: int(), half: int() }, methods: { set: method(int()) } } },
 });
 
@@ -968,7 +1007,15 @@ forEachCodec(() => {
 /** A hold of `Notes` for S1 as a message. */
 function notesHold(id: number): Extract<Message, { kind: "hold" }> {
 	const { name: type, version, fingerprint } = Notes;
-	return { kind: "hold", hold: id, type, version, fingerprint, params: jsonPart({ session: "S1" }) };
+	return {
+		kind: "hold",
+		hold: id,
+		type,
+		version,
+		fingerprint,
+		params: jsonPart({ session: "S1" }),
+		address: SERVER_ADDRESS,
+	};
 }
 
 const UTF8 = new TextEncoder();

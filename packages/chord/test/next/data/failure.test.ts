@@ -20,7 +20,7 @@ describe("failure causes", () => {
 	});
 
 	it("the kind comes from the stage, never from the error code", () => {
-		const chord = invalid("placement", "wrong host");
+		const chord = invalid("host_address", "wrong host");
 		expect(openFailure(chord, "open")).toEqual({ kind: "transient", error: chord });
 		expect(openFailure(broken(chord), "open")).toEqual({ kind: "broken", error: chord });
 	});

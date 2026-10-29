@@ -31,6 +31,8 @@ import {
 	partValue,
 	RawPeer,
 	rejection,
+	SERVER_ADDRESS,
+	Server,
 	Session,
 	serveNotes,
 	type TestPrincipal,
@@ -482,13 +484,24 @@ describe("getters", () => {
 
 forEachCodec(() => {
 	describe("principals and where a reference goes", () => {
-		const Who = remote("app.who", { version: 1, params: { id: int() }, variants: { v: { state: { who: str() } } } });
-		const Outer = remote("app.outer", { version: 1, params: {}, variants: { v: { state: { who: str() } } } });
+		const Who = remote("app.who", {
+			version: 1,
+			params: { id: int() },
+			hostAddress: () => Server(),
+			variants: { v: { state: { who: str() } } },
+		});
+		const Outer = remote("app.outer", {
+			version: 1,
+			params: {},
+			hostAddress: () => Server(),
+			variants: { v: { state: { who: str() } } },
+		});
 		const Inner = local("app.inner", { version: 1, params: { id: int() }, members: { who: str() } });
 		const Desk = local("app.desk", { version: 1, params: {}, members: { who: method(undefined, str()) } });
 		const Gate = remote("app.gate", {
 			version: 1,
 			params: {},
+			hostAddress: () => Server(),
 			variants: { v: { methods: { who: method(undefined, str()) } } },
 		});
 		type P = TestPrincipal;
@@ -518,6 +531,12 @@ forEachCodec(() => {
 			await expect(loading).rejects.toThrow("app.who: a host without a principal serves only local types");
 		});
 
+		it("a host without an address serves no remote type, whatever its principal", async () => {
+			const host = createHost<P>({ principal: { kind: "server" }, onError: () => {} });
+			const loading = host.load([{ name: "@test/app", facet: defineFacet<P>((h) => serveAll(h, [])) }], context);
+			await expect(loading).rejects.toThrow("app.who: a host without an address serves only local types");
+		});
+
 		it("ctx.get acts as ctx.principal: a guest's call gets the guest's view; a local handler's acts as the host", async () => {
 			const { server, client } = await linked((h) => serveAll(h, []), { child: { kind: "guest", session: "S1" } });
 			expect(await (await client.get(Gate, {}, context)).who(context)).toBe("guest");
@@ -533,6 +552,7 @@ forEachCodec(() => {
 		it("identity includes the principal key: equal keys share one object", async () => {
 			const factories: string[] = [];
 			const host = createHost<P>({
+				address: Server(),
 				principal: { kind: "guest", session: "S1" },
 				principalKey: (principal) => principal.kind,
 				onError: () => {},
@@ -549,6 +569,7 @@ forEachCodec(() => {
 				version: Who.version,
 				fingerprint: Who.fingerprint,
 				params: jsonPart({ id: 1 }),
+				address: SERVER_ADDRESS,
 			});
 			await peer.next("bound");
 			expect(factories).toEqual(["1 guest"]);
@@ -562,6 +583,7 @@ forEachCodec(() => {
 				version: Who.version,
 				fingerprint: Who.fingerprint,
 				params: jsonPart({ id: 1 }),
+				address: SERVER_ADDRESS,
 			});
 			await owner.next("bound");
 			expect(factories).toEqual(["1 guest", "1 owner"]);
@@ -569,7 +591,12 @@ forEachCodec(() => {
 
 		it("remote objects with empty params are not activated by load; they live while referenced", async () => {
 			const factories: string[] = [];
-			const Empty = remote("app.empty", { version: 1, params: {}, variants: { v: { state: { n: int() } } } });
+			const Empty = remote("app.empty", {
+				version: 1,
+				params: {},
+				hostAddress: () => Server(),
+				variants: { v: { state: { n: int() } } },
+			});
 			const { server } = await linked((h) =>
 				h.serve(Empty, (_, principal) => {
 					factories.push(principal.kind);
@@ -661,7 +688,7 @@ describe("acquiring: hold and get", () => {
 	const offline = { code: "unavailable", message: "app.svc(1): offline" };
 
 	it("invalid params and a local type not served here: at once", async () => {
-		const host = createHost<TestPrincipal>({ ...noErrors, principal: { kind: "server" } });
+		const host = createHost<TestPrincipal>({ address: Server(), ...noErrors, principal: { kind: "server" } });
 		await host.load([{ name: "@test/app", facet: defineFacet<TestPrincipal>((h) => void serveNotes(h)) }], context);
 		const params = { code: "invalid", reason: "params" };
 		expect(() => host.hold(Notes, { session: 1 } as never, context)).toThrow("params");
@@ -814,8 +841,8 @@ forEachCodec(() => {
 			return { host, child: new RawPeer(b), parent, errors };
 		}
 
-		/** Sends a hold of `PlacedNotes` (or `type`) for `session`, naming `address` when given. */
-		function holdOf(peer: RawPeer, session: string, address?: string, type: string = PlacedNotes.name, hold = 0) {
+		/** Sends a hold of `PlacedNotes` (or `type`) for `session`, naming the session `address`. */
+		function holdOf(peer: RawPeer, session: string, address: string, type: string = PlacedNotes.name, hold = 0) {
 			peer.send({
 				kind: "hold",
 				hold,
@@ -823,13 +850,13 @@ forEachCodec(() => {
 				version: PlacedNotes.version,
 				fingerprint: PlacedNotes.fingerprint,
 				params: jsonPart({ session }),
-				...(address === undefined ? {} : { address: { kind: "session", params: { id: address } } }),
+				address: { kind: "session", params: { id: address } },
 			});
 		}
 
 		const misplaced = {
 			code: "invalid",
-			reason: "placement",
+			reason: "host_address",
 			message: "app.placed-notes: placed on session, this host is session|S1",
 		};
 
@@ -839,7 +866,7 @@ forEachCodec(() => {
 			expect((await child.next("bound")).holds[0]).toMatchObject({ hold: 0 });
 		});
 
-		it("refuses a hold served here whose params place it elsewhere, whatever address it names: invalid/placement (race 5)", async () => {
+		it("refuses a hold served here whose params place it elsewhere, whatever address it names: invalid/host_address (race 5)", async () => {
 			const { child } = await worker();
 			holdOf(child, "S2", "S1");
 			expect(await child.next("failed")).toMatchObject({
@@ -847,7 +874,7 @@ forEachCodec(() => {
 				cause: { kind: "broken", error: { kind: "chord", error: misplaced } },
 			});
 			// A refused hold is kept (a retry starts it again): the next hold takes the next id.
-			holdOf(child, "S2", undefined, PlacedNotes.name, 1);
+			holdOf(child, "S2", "S2", PlacedNotes.name, 1);
 			expect(await child.next("failed")).toMatchObject({
 				hold: 1,
 				cause: { kind: "broken", error: { kind: "chord", error: misplaced } },
@@ -860,7 +887,7 @@ forEachCodec(() => {
 			expect((await child.next("bound")).holds[0]).toMatchObject({ hold: 0 });
 		});
 
-		it("sends a reference made here whose placement is another host over the parent link, though it serves the type", async () => {
+		it("sends a reference made here whose host address is another host over the parent link, though it serves the type", async () => {
 			const { host, parent } = await worker({ parent: true });
 			const elsewhere = host.hold(PlacedNotes, { session: "S2" }, context);
 			const hold = await parent!.next("hold");
@@ -871,7 +898,7 @@ forEachCodec(() => {
 
 		it("sends a hold it cannot serve or route over the parent link, unparsed", async () => {
 			const { child, parent } = await worker({ parent: true });
-			holdOf(child, "S9", undefined, "app.elsewhere");
+			holdOf(child, "S9", "S9", "app.elsewhere");
 			const relayed = await parent!.next("hold");
 			expect(relayed).toMatchObject({ type: "app.elsewhere" });
 			expect(partValue(relayed.params)).toEqual({ session: "S9" });
@@ -879,7 +906,7 @@ forEachCodec(() => {
 
 		it("never sends a hold from the parent back to it: unavailable (race 8)", async () => {
 			const { parent } = await worker({ parent: true });
-			holdOf(parent!, "S9", undefined, "app.elsewhere");
+			holdOf(parent!, "S9", "S9", "app.elsewhere");
 			expect(await parent!.next("failed")).toMatchObject({
 				hold: 0,
 				cause: {
@@ -892,25 +919,25 @@ forEachCodec(() => {
 
 		it("refuses a hold it cannot serve or route without a parent link: unavailable", async () => {
 			const { child } = await worker();
-			holdOf(child, "S9", undefined, "app.elsewhere");
+			holdOf(child, "S9", "S9", "app.elsewhere");
 			expect(await child.next("failed")).toMatchObject({
 				cause: { kind: "broken", error: { kind: "chord", error: { code: "unavailable" } } },
 			});
 		});
 
-		it("fails a reference broken with what its placement throws", async () => {
+		it("fails a reference broken with what its hostAddress throws", async () => {
 			const Throwing = remote("app.throwing", {
 				version: 1,
 				params: {},
-				placement: () => {
-					throw new Error("placement threw");
+				hostAddress: () => {
+					throw new Error("hostAddress threw");
 				},
 				variants: { v: { state: { n: int() } } },
 			});
 			const client = createHost<TestPrincipal>(noErrors);
 			await client.load([], context);
 			expect(await rejection(client.get(Throwing, {}, context))).toMatchObject({
-				message: "app.throwing: placement threw",
+				message: "app.throwing: hostAddress threw",
 			});
 			expect(client.hold(Throwing, {}, context).state.value).toMatchObject({ kind: "failed" });
 		});

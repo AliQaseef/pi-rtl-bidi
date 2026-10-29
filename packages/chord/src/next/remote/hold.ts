@@ -72,7 +72,7 @@ type HoldState =
 			/** The members it follows, in the order they were subscribed. */
 			readonly followed: Followed[];
 	  }
-	/** Refused where it arrived (placement, `authorize`, a mismatch, invalid params, a cycle): `retry` starts it again. */
+	/** Refused where it arrived (host address, `authorize`, a mismatch, invalid params, a cycle): `retry` restarts it. */
 	| { readonly kind: "refused"; readonly request: HoldRequest }
 	| { readonly kind: "released" };
 
@@ -86,8 +86,8 @@ const BINDING: HoldState = { kind: "binding" };
 /**
  * One hold served here: a reference to its object acting as its caller (the hold's principal). While pending, each
  * failure of its object is sent as `failed` (with the rest of its backoff window) and the next attempt as `loading`; a
- * hold that cannot be taken (a refused type, a mismatch, invalid params or placement) is a broken `failed` that holds
- * nothing until a `retry` starts it again. Once live it binds when its link's window has a slot, then sends a part per batch that changed its members
+ * hold that cannot be taken (a refused type, a mismatch, invalid params or a wrong host address) is a broken `failed`
+ * that holds nothing until a `retry` starts it again. Once live it binds when its link's window has a slot, then sends a part per batch that changed its members
  * (or keeps their ops pending while the window is full), and `gone` when its object ends.
  */
 export class Hold implements Holder {
@@ -139,7 +139,8 @@ export class Hold implements Holder {
 	 * Admits the hold once `load` resolved: its params within the link's part limit (`too_large/part`), then relayed
 	 * (it is replaced by a relayed hold), or served here, its params opened and parsed (a malformed part is a protocol
 	 * error), its object taken and followed (`moved`). A hold that cannot go anywhere, a type that does not match,
-	 * invalid params, a wrong placement or a cycle (Q5) is a broken `failed`; the hold is kept, refused, for a `retry`.
+	 * invalid params, a wrong host address or a cycle (Q5) is a broken `failed`; the hold is kept, refused, for a
+	 * `retry`.
 	 */
 	async start(request: HoldRequest): Promise<void> {
 		const { link } = this.#provider;
