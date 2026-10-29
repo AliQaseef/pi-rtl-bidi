@@ -61,14 +61,14 @@ A needs W's B, B needs S's C; W's hold for C waits for S's whole `load`, which w
   code (`host.get`, `host.hold`, `host.registry`), a link's peer (`hold`). **It ends only when its holder ends it** (the
   attempt ends, the call settles, `release()`, a getter gives up, the peer's link or origin closes, revocation, the
   holding host closes), never because its provider is missing, went away or does not fit.
-- **Placement by address** (round 1): a `local` type goes here; a `remote` type with a placement goes to the address
-  its placement (computed from the consumer's own contract) gives: here if that is this host's address, whether served
+- **The destination by address** (round 1): a `local` type goes here; a `remote` type goes to the address its
+  `hostAddress` (computed from the consumer's own contract) gives: here if that is this host's address, whether served
   here or not, else over the route for that kind or the parent (design §3). Every `remote` type declares
-  its placement (owner, 2026-10-29: the optional placement of slice 3a is removed, and with it the fallback "here if
+  its `hostAddress` (owner, 2026-10-29: the optional `placement` of slice 3a is removed and the field renamed, and with it the fallback "here if
   served, otherwise the parent" and its re-placement at the first parent link). A hold arriving for an address that is not this host's is relayed or
-  refused (`invalid/placement`) as today; a relay never captures a hold because it serves the same name.
+  refused (`invalid/host_address`) as today; a relay never captures a hold because it serves the same name.
 - **Then the selected provider is checked** (served, version or accepted version and fingerprint, `authorize`, the
-  provider's own placement check). Version checks never look at a same-name registration elsewhere.
+  provider's own host-address check). Version checks never look at a same-name registration elsewhere.
 - **The publication gate:** a request made on this host, or arriving on its links, before the host's first
   publication (§6) is not placed yet; it shows `loading` and is placed by the publication. The gate lasts only for the
   synchronous setups, never for activation, so it cannot deadlock.
@@ -79,7 +79,7 @@ A needs W's B, B needs S's C; W's hold for C waits for S's whole `load`, which w
   | a fitting provider | bound (to the object here, or to the hold over a path) |
   | not published yet | unbound `unpublished`: `loading` |
   | nobody serves the name at its address | unbound `not_served`: `failed { waiting }` |
-  | no fitting version, a fingerprint that differs at the same version, a placement the provider computes elsewhere (code skew) | unbound `version`: `failed { waiting }` |
+  | no fitting version, a fingerprint that differs at the same version, a host address the provider computes elsewhere (code skew) | unbound `version`: `failed { waiting }` |
   | the registry is served, but its first `compose` (or the reader's version mapping) threw | unbound `compose`: `failed { waiting }` |
   | the provider host is installing a revision and the hold does not fit its current code | unbound `installing` at the provider: `loading` |
   | the path has no link (a drop, a route resolving) | on the path: `loading` |
@@ -393,7 +393,7 @@ ring that never existed, `/tmp/model/sol-probe4.log`).
 
 R18 (dependency failures `waiting`, no backoff, the deadline paused while parked, the dependency check as boundary,
 wakes on every change, an ended dependency breaks), S2 and S3 (`waiting`, woken at every usable value), slice 8's
-last-good rule (dropped when a contribution leaves), §3's placement table (by address; the publication gate), §6 (the
+last-good rule (dropped when a contribution leaves), §3's destination table (by address; the publication gate), §6 (the
 simultaneous-cycle gap: (A) one narrowed deadline or (B) the probe), §7 (`host.hold`, getters, calls), §21 (no `gone` on
 removal; a dropped version unbinds only its requests; installs never await activations; rollout without revision
 fields; the reload handover), the start barrier (R17, W6), `FailureCause` (+ `waiting`), `loading`/`failed` with the
