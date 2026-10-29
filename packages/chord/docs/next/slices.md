@@ -36,7 +36,8 @@ slice spec's section citations are for orientation, not a reading limit (owner, 
 ## The slices
 
 Order (owner, 2026-10-22: routines and jobs before the store and reload; 2026-10-27: slice 8 before slice 7, whose
-reload has to reload real registries).
+reload has to reload real registries; 2026-10-29: slice 7 split into 7a, 7b, 7c; the app kit as slices 10 and 11;
+telemetry last, since it instruments the app kit too).
 
 | # | Slice | In short |
 | --- | --- | --- |
@@ -51,7 +52,10 @@ reload has to reload real registries).
 | 6b | **Durable and jobs on the store** | persisted jobs, Durable's `StoreStorage`, the Chord source over Durable's views (`self.follow`) |
 | 8 | **Registries and `host.root`** | registries, `self.writable`, `retryOn`, Durable's `registryReader`, `host.root` (`chord(fn, context)` and the harness object are p3's base code) |
 | 7a | **The dependency model** | requests that outlive providers, parked attempts without timers, wakes, the publication gate, getters, registries as dependencies, `parked_long` (`slice-7a.md`, `dependencies/model.md`) |
-| 7b | **Reload and rollout** | plugin loading (loader D), staging, swaps and restarts, removal and re-serving, revisions, `accepts` in use |
+| 7b | **Reload in the kernel** | `host.reload`: staging, commit, rollback; swaps, restarts, removal and re-serving; holds and `accepts` across a reload; jobs and registries across a reload; per-name wakes (`slice-7b/` brief) |
+| 7c | **Loader and dev** | `chord/next/loader` (discovery, `buildFacet`, `evaluateFacet`, `pluginFile`, dependencies) and `chord/next/dev` (watcher, reload control across hosts) |
+| 10 | **HTTP and workers** | `chord/next/http` (server, `Http` registry, responses as descriptions, WebSocket entry) and `chord/next/workers` (a worker per address, IPC, idle stop) |
+| 11 | **Web and TUI** | `chord/next/web` (page host, React hooks) and `chord/next/tui` (launcher, sandbox), from p2's code |
 | 9 | **Telemetry** | spans, events, metrics across hosts |
 
 The playground (`apps/chord-playground`) moves to the new code once slice 4 exists. Round-3 cuts (C3-C16) and
