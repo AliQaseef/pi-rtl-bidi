@@ -117,8 +117,8 @@ export const Catalog = remote("catalog", { placement: () => Server(), … });
 - `hostKind(name, params?)` declares a kind of addressable host; its params follow the params policy of contracts
   (section 5). `Session({ id: "S1" })` is an **address**: `{ kind, params, key }`, the key built like an identity key
   (`session|S1`); two addresses are equal when their keys are. No host-name strings appear in app code.
-- **`placement`** (owner, 2026-10-21) is a typed function of the params returning an address; `local` contracts have
-  none. It is not part of the contract fingerprint; a changed rule surfaces as a refusal (below).
+- **`placement`** (owner, 2026-10-21) is a typed function of the params returning an address, required on every
+  `remote` contract (owner, 2026-10-29); `local` contracts have none. It is not part of the contract fingerprint; a changed rule surfaces as a refusal (below).
 - **`params`** (owner, 2026-10-21; was `input`) select the instance among objects of its type and are part of its
   identity (section 5).
 - **The caller computes the address** and sends it in the `hold`; a host that relays routes by that address alone and
@@ -129,7 +129,7 @@ export const Catalog = remote("catalog", { placement: () => Server(), … });
 
   | Case | Goes |
   | --- | --- |
-  | the type is served here and its placement (computed here from the params) is this host's address, or the host has no address, or the type no placement | here |
+  | the type is served here and its placement (computed here from the params) is this host's address, or the host has no address | here |
   | a reference made here (`host.get`/`hold`, `self.get`, `ctx.get`) to a served type placed on another host | on, as if not served here (next rows): worker S1 reaches `Notes { session: "S2" }` through the parent |
   | an arriving hold for a served type whose params place it on another host | broken `invalid/placement`; the address the hold names only routes it |
   | the hold names an address of a kind this host has a route for | over that route's link (the address's params checked against the kind, then `authorize`) |

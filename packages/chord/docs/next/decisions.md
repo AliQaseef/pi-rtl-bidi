@@ -1771,6 +1771,12 @@ validation and copies the v2 kernel added around Delta.
   setups a registry without a value cannot get one before a reload, so a reader then fails at once `transient`
   (`unavailable/undeclared`) and is retried when the registry gets its first value (R18), as `self.get` of a type not
   served here fails at once (refined 2026-10-27 after the second spec review: no `readyTimeout` wait at start); once live, a later failure of the registry changes nothing (last good value).
+- **Every remote type declares its placement (owner, 2026-10-29: "yes, let's remove it"):** `placement` is required in
+  `remote()` (a type error without it, and a declaration error at runtime); a remote type without placement, a leftover
+  of slice 3a (remote objects over one link, before host kinds in 4a), is gone, and with it the fallback "here if served
+  here, otherwise the parent" and its re-placement at the first parent link. Every remote request is placed by its
+  address alone (dependency model, `packages/chord/docs/next/dependencies/`). Tests and examples get `placement: () =>
+  Server()` or their own host kind.
 - **No client providers for now (owner, 2026-10-28: "yeah, no client providers for now"; reviews
   `/tmp/barrier-{astra,fable,opus,sol}.md`):** clients stay unaddressable and serve only `local` types (design §3).
   Client-side capabilities (a phone's camera, clipboard, a page's WebMCP tools) go through an owner's state, as the
