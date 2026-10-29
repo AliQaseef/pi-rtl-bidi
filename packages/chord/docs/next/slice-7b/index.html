@@ -208,7 +208,10 @@ named by their directory).</p>
 <li><strong><code>peerDependencies</code></strong> are <strong>host packages</strong>: the running app supplies them, one instance per process (one Chord,
 one React; <code>instanceof ChordError</code> and React hooks only work that way). The bundler never copies them.</li>
 <li><strong><code>dependencies</code></strong> are the plugin&#39;s own npm packages (<code>marked</code>): installed into the plugin&#39;s <code>node_modules</code> with
-<code>--ignore-scripts</code> and bundled into every facet that imports them.</li>
+<code>--ignore-scripts</code> and bundled into every facet that imports them. <strong>Decided</strong> (owner, 2026-10-29): bundled by
+default; on Node a plugin may keep named packages external by an explicit list, <code>&quot;chord&quot;: { &quot;external&quot;: [&quot;better-sqlite3&quot;] }</code>. Server and worker facets then load them from the plugin&#39;s <code>node_modules</code> with <code>createRequire</code>,
+as pi 1.0 loads extension dependencies, native addons included; they stay in Node&#39;s module cache until the process
+ends, so a new version takes effect after a restart. A browser or TUI facet that imports one fails to build.</li>
 <li><strong>No <code>tsconfig.json</code> is needed.</strong> The bundler strips types and does not type-check; JSX is compiled with the
 automatic React runtime, a fixed setting of the loader. A plugin may keep a <code>tsconfig.json</code> for its editor and for
 <code>tsc --noEmit</code> (the SDK ships one to extend); the loader ignores it.</li>
@@ -264,6 +267,10 @@ returns nothing.</p>
 <tr>
 <td>an npm package in <code>dependencies</code> (<code>marked</code>)</td>
 <td>inlined, resolved from the plugin&#39;s own <code>node_modules</code></td>
+</tr>
+<tr>
+<td>an npm package listed in <code>chord.external</code> (Node facets only)</td>
+<td>external: <code>require</code>d from the plugin&#39;s own <code>node_modules</code> at evaluation</td>
 </tr>
 <tr>
 <td>a host package (<code>@earendil-works/chord/next</code>, <code>react</code>, <code>@app/core</code>, …)</td>

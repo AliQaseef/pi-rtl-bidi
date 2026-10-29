@@ -100,7 +100,11 @@ plugins/notes/
 - **`peerDependencies`** are **host packages**: the running app supplies them, one instance per process (one Chord,
   one React; `instanceof ChordError` and React hooks only work that way). The bundler never copies them.
 - **`dependencies`** are the plugin's own npm packages (`marked`): installed into the plugin's `node_modules` with
-  `--ignore-scripts` and bundled into every facet that imports them.
+  `--ignore-scripts` and bundled into every facet that imports them. **Decided** (owner, 2026-10-29): bundled by
+  default; on Node a plugin may keep named packages external by an explicit list, `"chord": { "external":
+  ["better-sqlite3"] }`. Server and worker facets then load them from the plugin's `node_modules` with `createRequire`,
+  as pi 1.0 loads extension dependencies, native addons included; they stay in Node's module cache until the process
+  ends, so a new version takes effect after a restart. A browser or TUI facet that imports one fails to build.
 - **No `tsconfig.json` is needed.** The bundler strips types and does not type-check; JSX is compiled with the
   automatic React runtime, a fixed setting of the loader. A plugin may keep a `tsconfig.json` for its editor and for
   `tsc --noEmit` (the SDK ships one to extend); the loader ignores it.
@@ -147,6 +151,7 @@ Each facet is built on its own, as one script. The bundler starts at the facet f
 | the plugin's own files (`./store.ts`, `./NoteList.tsx`) | inlined into the facet's script |
 | another plugin's contract (`../sessions/contract.ts`, or `@pi/sessions/contract` for an installed package) | inlined too: a copy, so a plugin carries the contract version it was built against (`accepts` needs that); only contracts and side-effect-free modules may be imported across plugins |
 | an npm package in `dependencies` (`marked`) | inlined, resolved from the plugin's own `node_modules` |
+| an npm package listed in `chord.external` (Node facets only) | external: `require`d from the plugin's own `node_modules` at evaluation |
 | a host package (`@earendil-works/chord/next`, `react`, `@app/core`, …) | **external**: a parameter of the script, the host's instance at load time |
 | a Node builtin (`node:fs`) | external, through the `require` the loader passes (server and worker facets only; a web facet that imports one fails to build) |
 | CSS (`import "./notes.css"`) | collected into one stylesheet per web facet |
