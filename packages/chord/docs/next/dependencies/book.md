@@ -352,8 +352,9 @@ bounded by its own `readyTimeout` deadline, as today. Then it goes live.
 The dependency check is the boundary between waiting and working (Astra's F3). Before it, the attempt holds no
 natives; after it, a dependency that leaves `live` is treated as after live (R18): the attempt goes on, and its calls
 through that reference meet the reference's state. So a parked attempt never holds a native, and an attempt that
-opened a native is never parked. This is a deliberate rule, and Astra called it what it is: a weakening of "live
-means every dependency is live". An object can finish opening after a dependency went away. Without that boundary a contributor unloading while the attempt opens its natives
+opened a native is never parked. It is not a rule of its own: it is R18's rule for live objects (a dependency that
+goes away leaves the object live; same-host calls in flight finish, remote ones fail, new calls meet the reference's
+state), applied from the dependency check on. Without that boundary a contributor unloading while the attempt opens its natives
 would leave it half open and parked, or force a seal, a drain and a fresh attempt for a dependency the object may not
 even use at once.
 
@@ -1399,9 +1400,9 @@ through, or recovers by its own backoff.
 
 2. **The dependency check is the activation boundary:** once every dependency is `live`, the attempt runs its own
    steps (natives in order, follow attaches, member checks, derives), bounded by its own `readyTimeout` deadline, and
-   goes live. A dependency that leaves `live` after the check is treated as after live (R18): the attempt goes on. This
-   is a deliberate rule (Astra: a weakening of "live means every dependency is live"): an object can finish opening
-   after a dependency went away, and its calls through that reference meet its state. So a parked attempt holds no
+   goes live. A dependency that leaves `live` after the check is treated as after live (R18): the attempt goes on. This is
+   R18's rule for live objects applied from the check on, not a rule of its own (owner, 2026-10-29: a dependency can
+   go away at any point of an object's life; the object stays live, its calls through that reference meet its state). So a parked attempt holds no
    natives, and an attempt that opened natives is never parked.
 3. **No timer while parked:** no dependency deadline, no backoff. The attempt's deadline is paused while parked (as
    eager migrations pause it) and resumes with the budget left.
