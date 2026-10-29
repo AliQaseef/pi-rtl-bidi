@@ -44,7 +44,7 @@ reload has to reload real registries).
 | 2 | **Failures and natives** | `self.open`, activation failures and recovery, backoff, the drain, timeouts |
 | 3a | **Remote objects over one link** | remote contracts, principals, variants, a memory link, the message format, holds, calls, one message per commit (no relay, no drops) |
 | 3b | **Surviving drops** | re-holds, parking, `ref.state`, `host.hold`, `ref.retry()`, `linger` |
-| 4a | **Links and relays** | host kinds, placement, routes, two-sided links, relays and principals, IPC and WebSocket, flow control, heartbeat |
+| 4a | **Links and relays** | host kinds, host addresses (`placement` then), routes, two-sided links, relays and principals, IPC and WebSocket, flow control, heartbeat |
 | 4b | **Authority and housekeeping** | revocation, cycles across hosts, `host.references`, `host.activity`, size limits, compression |
 | 5 | **Routines and jobs** | `self.routines`, `self.job` |
 | 6a | **The store** | the store (backends, tables, queries, writes, commit queue, outbox, documents engine, migrations, export), persisted documents, `self.table`, keyed watches and retirement |

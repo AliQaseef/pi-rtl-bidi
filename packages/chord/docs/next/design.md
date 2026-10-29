@@ -52,7 +52,7 @@ versions and adapters · 28 building: slices · 29 telemetry · 30 cost model ·
 | link | a connection between two hosts |
 | host kind / address | typed description of addressable hosts / one host of a kind (`Session({ id })`) |
 | facet | a plugin's declarations for one host kind: the types it serves, its contributions; no state or behaviour of its own |
-| object type | a contract: name, params (which instance), host placement, members, version |
+| object type | a contract: name, params (which instance), host address, members, version |
 | object | one instance per (type, params, principal key); `local`: per (type, params) |
 | principal | who calls; stamped by links, typed by the app |
 | reference | what `get` returns; keeps its object alive; live and hydrated when awaited |
@@ -99,7 +99,7 @@ mode sandbox (a worker thread inside a worker), remote environment daemons (thei
 the TUI sandbox behind its launcher (the launcher only passes frames). A Durable Object deployment is a mesh routed by
 the edge (section 24 and the research note).
 
-### Host kinds, addresses and placement
+### Host kinds and addresses
 
 ```ts
 export const Server = hostKind("server");
@@ -108,37 +108,38 @@ export const Session = hostKind("session", { id: str() });      // params like a
 export const Notes = remote("notes", {
   version: 1,
   params: { session: str() },                                   // flat record of required scalars
-  placement: ({ session }) => Session({ id: session }),         // a typed function of the params
+  hostAddress: ({ session }) => Session({ id: session }),       // a typed function of the params
   variants: { … },
 });
-export const Catalog = remote("catalog", { placement: () => Server(), … });
+export const Catalog = remote("catalog", { hostAddress: () => Server(), … });
 ```
 
 - `hostKind(name, params?)` declares a kind of addressable host; its params follow the params policy of contracts
   (section 5). `Session({ id: "S1" })` is an **address**: `{ kind, params, key }`, the key built like an identity key
   (`session|S1`); two addresses are equal when their keys are. No host-name strings appear in app code.
-- **`placement`** (owner, 2026-10-21) is a typed function of the params returning an address, required on every
-  `remote` contract (owner, 2026-10-29); `local` contracts have none. It is not part of the contract fingerprint; a changed rule surfaces as a refusal (below).
+- **`hostAddress`** (owner, 2026-10-21 as `placement`, renamed 2026-10-29) is a typed function of the params returning
+  the address of the host that serves the object, required on every `remote` contract (owner, 2026-10-29); `local`
+  contracts have none. It is not part of the contract fingerprint; a changed rule surfaces as a refusal (below).
 - **`params`** (owner, 2026-10-21; was `input`) select the instance among objects of its type and are part of its
   identity (section 5).
 - **The caller computes the address** and sends it in the `hold`; a host that relays routes by that address alone and
   never needs the contract or parses params. **The provider computes it again** from the params and refuses an object
-  that is not its own: broken `invalid/placement` (misrouted holds are never forwarded). During a rollout the refusal
+  that is not its own: broken `invalid/host_address` (misrouted holds are never forwarded). During a rollout the refusal
   is handled like a mismatch (provider on another revision: park; same revision: fail; slice 7).
 - **Where a reference made on a host, or a hold arriving on one of its links, goes** (first match; slice 4a):
 
   | Case | Goes |
   | --- | --- |
-  | the type is served here and its placement (computed here from the params) is this host's address, or the host has no address | here |
+  | the type is served here and its host address (computed here from the params) is this host's address, or the host has no address | here |
   | a reference made here (`host.get`/`hold`, `self.get`, `ctx.get`) to a served type placed on another host | on, as if not served here (next rows): worker S1 reaches `Notes { session: "S2" }` through the parent |
-  | an arriving hold for a served type whose params place it on another host | broken `invalid/placement`; the address the hold names only routes it |
+  | an arriving hold for a served type whose params place it on another host | broken `invalid/host_address`; the address the hold names only routes it |
   | the hold names an address of a kind this host has a route for | over that route's link (the address's params checked against the kind, then `authorize`) |
   | otherwise (a remote type) | over the parent link; a hold that arrived *on* the parent link is never sent back to it: `unavailable` |
   | no parent link: the host never had one | `unavailable` |
   | no parent link: it is down (a drop) | waits on the parent path, `loading`, until the next link (design audit, 2026-10-27) |
 
-  A `placement` or `authorize` that throws fails the hold broken with that error; an address whose params fail the
-  kind's check is broken `invalid/placement`.
+  A `hostAddress` or `authorize` that throws fails the hold broken with that error; an address whose params fail the
+  kind's check is broken `invalid/host_address`.
 
 ### The low-level host API
 
@@ -343,7 +344,7 @@ host.route(Session, {
 
 ### Relays (slice 4a; decision "Relay flow control per origin", owner, 2026-10-24)
 
-A host that receives a hold it cannot serve (the placement table above: a route or the parent) **relays** it: it holds
+A host that receives a hold it cannot serve (the table above: a route or the parent) **relays** it: it holds
 it again on that link (upstream) with the arriving hold's principal and incarnation, and forwards between the two
 without parsing payloads. The provider keeps the window, the pending queues and the calls per origin; the relay never
 drops, folds or resets.
@@ -474,7 +475,7 @@ drops, folds or resets.
 ## 5. Object types
 
 ```ts
-export const Notes = remote("notes", { version, placement, params, variants });
+export const Notes = remote("notes", { version, hostAddress, params, variants });
 export const NoteStore = local("notes.store", { version, params, members });
 ```
 
@@ -520,7 +521,7 @@ host.serve(Notes, ({ session }, principal, self) =>
   fingerprint, never a description. The provider binds when both equal its current ones, or (slice 7) when the
   version is one it accepts and the fingerprint equals the one computed from its own history (section 27). Every
   contract change, additive ones included, bumps `version`. Anything else is `contract_mismatch` (or `updating` during
-  a rollout, section 21). The fingerprint covers params, variants and members, not placement. A consumer whose contract
+  a rollout, section 21). The fingerprint covers params, variants and members, not the host address. A consumer whose contract
   does not fit gets a mismatch on its own binding; the provider object and its other bindings are not affected.
 - **Variants:** a member name has the same kind (state or method) in every variant that has it, and a method the same
   signature (arguments and result) in every variant; state schemas may differ per variant (redaction). Enforced at
@@ -547,7 +548,7 @@ host.serve(Notes, ({ session }, principal, self) =>
   binding is held only by the served type's registration and by calls in flight (GC-tested; no global strong cache).
 - **Errors** (L1, slice 3a): `ChordError` with a code and, for some codes, a reason, a closed union that is part of the
   link protocol (adding one bumps the protocol version; a receiver rejects unknown reasons; a test pins the list):
-  `invalid` (`args`, `params`, `member`, `placement`, `reentrant`, `read_after_bulk`, `cycle`), `contract_mismatch`
+  `invalid` (`args`, `params`, `member`, `host_address`, `reentrant`, `read_after_bulk`, `cycle`), `contract_mismatch`
   (`updating`), `forbidden` (`revoked`), `gone`, `not_ready`, `released` (`ended`, `closed`, `settled`, `version`, `discarded`; none for a holder's own release), `too_large` (`part`), `unavailable` (`locked`,
   `park_timeout`, `busy`, `storage_failed`, `undeclared`: a registry no plugin serves here, slice 8), `aborted`. A failed check names TypeBox's instance path ("unknown field", "missing", else TypeBox's
   message; keys containing `/` or `~` make the path ambiguous, documented). Plugins throw `PluginError(code, message,
@@ -751,7 +752,7 @@ location are dropped.
 | object `failed` | reject at once with the cause | `failed` with cause and `retryAt` |
 
 - A failed reference stays alive: while held, Chord retries per the backoff; `ref.retry()` tries at once (a Retry
-  button; over a link the `retry { hold }` message, which also re-runs a refused hold's start: authorize, placement,
+  button; over a link the `retry { hold }` message, which also re-runs a refused hold's start: authorize, the host address,
   binding; design audit 2026-10-27); success goes `loading`, then `live`. A provider tells a pending
   hold's consumer each failure (`failed`, with the rest of its backoff window) and the next attempt (`loading`).
 - **Parked calls** (slice 3b): calls made while the reference is loading are queued in order, each waiting at most the
@@ -2229,7 +2230,7 @@ registry keys with a `conflict` flag;
 (`native/` directories, `defineNative`, lints); weakening type checking; "magic" input-field matching for delete; a
 factory trial; a migrate dry run; principal field patterns and re-stamping for revocation; `storeKey`; a consumer contract check during staging; reload votes; per-plugin rollback within a
 host; `defaultProjectTrust: "always"`; loader variants A and B; a topology layer above the host API; a stream type in
-Chord; callbacks as method arguments; `opaque` members; numeric middleware priorities; placement as data naming an
+Chord; callbacks as method arguments; `opaque` members; numeric middleware priorities; host addresses as data naming an
 input field; host-name strings in app code; host values (start data and platform bindings are core objects);
 consumer-side linger; registry composition as a staging check; a JSONL document storage; `tx.get` for documents; validating state and documents on commits or reads (migration results are validated once, R8); copying values on same-host calls; op-rewriting projections and a
 view algebra; keeping natives across reloads by name; Chord ending the process on a storage failure; an `optional`
