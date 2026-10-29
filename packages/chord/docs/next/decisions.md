@@ -1771,6 +1771,12 @@ validation and copies the v2 kernel added around Delta.
   setups a registry without a value cannot get one before a reload, so a reader then fails at once `transient`
   (`unavailable/undeclared`) and is retried when the registry gets its first value (R18), as `self.get` of a type not
   served here fails at once (refined 2026-10-27 after the second spec review: no `readyTimeout` wait at start); once live, a later failure of the registry changes nothing (last good value).
+- **`hostAddress` instead of `placement` (owner, 2026-10-29: "yes, rename"):** the field of a `remote` contract that
+  computes where its object lives is `hostAddress: (params) => Address` (it returns the address of the host that serves
+  the object, the vocabulary of `createHost({ address })`, routes and holds); supersedes the name of "`placement`, not
+  `host`" (2026-10-21). The error reason `invalid/placement` is `invalid/host_address`; the internal module that decides
+  where a request goes (`host/placement.ts`, `Placement`) is `host/destination.ts`, `Destination`. Earlier entries' and
+  slice specs' "placement" reads "host address"; they keep their wording as history.
 - **Every remote type declares its placement (owner, 2026-10-29: "yes, let's remove it"):** `placement` is required in
   `remote()` (a type error without it, and a declaration error at runtime); a remote type without placement, a leftover
   of slice 3a (remote objects over one link, before host kinds in 4a), is gone, and with it the fallback "here if served
