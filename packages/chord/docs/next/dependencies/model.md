@@ -1,6 +1,9 @@
 # Dependency resolution in Chord v2: one model (decided, 2026-10-29)
 
-Status: proposal for the owner, not decided. Built in slice 7 with reload and rollout. Sources: the owner's direction
+Status: decided (owner, 2026-10-29); **built for slice 7a** (§1-4 and §6-11 without what installs and reloads add:
+§1's `installing`, §4's install-end and reload wakes, §3.9's reload handover and §5's removal, versions and rollout
+are slice 7b's; folded into `design.md` §3, §5, §6, §7, §17, §21's start barrier, §22; `slice-7a.md`). The draft
+history below is kept as it was. Sources: the owner's direction
 ("park until resolved"; "no difference between local and remote resolution: a link going is like a plugin
 unloading"), the reviews (`/tmp/dep-mechanism-*.md`, `/tmp/dep-graph-*.md`, `/tmp/barrier-*.md`,
 `/tmp/model/review{1,2}-*.md`), the code at pi `358f7d46a`. **Owner** marks an open decision.
@@ -138,6 +141,7 @@ through, or recovers by its own backoff.
    | any `loading`, none failed | `loading` |
    | any `failed` | `failed { waiting, "waiting for X: <X's cause>" }`, `retryAt` undefined; the message keeps the nearest blocker and the root cause within the 500-character rule |
    | one failed with `invalid/cycle` (a dependent off the ring) | `broken` with the same error: it would wait on a ring that never heals by itself |
+   | one failed with `forbidden` (an `authorize` refused it: authority, §3.6) | `broken` with the same error: only `retry()` or a reload helps (slice 7a fix round 1) |
    | one `ended` (revoked, or its host closed) | `broken` with that error: the request cannot come back; `retry()` or a reload makes new requests (a guard: a dependency ends only with its holder's principal or host, so the dependent ends too; Fable) |
 
 2. **The dependency check is the activation boundary:** once every dependency is `live`, the attempt runs its own
@@ -152,7 +156,9 @@ through, or recovers by its own backoff.
    failed, a new cause compared by value, ended; Opus: otherwise a ring of waiting attempts passes its causes round and
    round), updating what it shows; it leaves parking when all are live. The factory never re-runs
    while parked. Wakes are coalesced per object and run after the batch that caused them; a change during the
-   attempt's own steps or its teardown is remembered.
+   attempt's own steps or its teardown is remembered. (As built in 7a, with the parent's note 5: a change while the
+   parked attempt checks or loads its pinned keys is remembered and checked again; after the dependency check, during
+   the own steps, a change is ignored, §3.2's R18 rule.)
 5. **Kept while parked:** its documents (the object's), its declarations and requests, its seal token; no natives.
    Ended with the object (its last holder; a host-lifetime object when its plugin is removed or the host closes).
 6. **`broken` only for the object's own code** (a throwing factory, a derive throwing at activation, hydration,

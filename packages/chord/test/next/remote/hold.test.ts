@@ -2,13 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { type Context, BACKGROUND_CONTEXT as context } from "../../../src/context/index.ts";
 import type * as Delta from "../../../src/delta/index.ts";
 import { decoder } from "../../../src/delta/index.ts";
-import { bool, int, local, method, obj, remote } from "../../../src/next/contracts/index.ts";
+import { bool, hostKind, int, local, method, obj, remote } from "../../../src/next/contracts/index.ts";
 import { broken } from "../../../src/next/data/index.ts";
 import { defineState } from "../../../src/next/documents/index.ts";
 import { createHost, defineFacet, type Host, type Self } from "../../../src/next/host/index.ts";
 import type { ChordHost } from "../../../src/next/host/internal.ts";
 import { type Link, memoryLinkPair } from "../../../src/next/link/index.ts";
-import { jsonPart } from "../../../src/next/link/internal.ts";
+import { binaryCodec, jsonPart } from "../../../src/next/link/internal.ts";
 import { Hold } from "../../../src/next/remote/hold.ts";
 import { constant } from "../../../src/next/state/index.ts";
 import {
@@ -102,7 +102,9 @@ function providerObject(server: unknown) {
 	const host = server as ChordHost<TestPrincipal>;
 	const { name: type, version, fingerprint } = Halves;
 	const request = { type, version, fingerprint, params: "{}", address: SERVER_ADDRESS };
-	return host.serving(request, {}, { kind: "owner" }, context);
+	const served = host.serving(request, {}, { kind: "owner" }, context);
+	if (served.kind !== "object") throw new Error("Halves is served here");
+	return served.object;
 }
 
 /** A remote type whose activation never completes: its open waits for its abort. */
@@ -457,6 +459,65 @@ forEachCodec(() => {
 		});
 	});
 
+	describe("holds that bind to nothing yet (dependency model §1, §3)", () => {
+		const Absent = { name: "app.absent", version: 1, fingerprint: "0123456789abcdef" };
+
+		it("a refused hold waits failed { waiting }, counted; a retry re-runs its start (loading, failed); its link's close drops it", async () => {
+			const { server, peer } = await rawLinked(() => {});
+			hold(peer, 0, Absent);
+			const failed = await peer.next("failed");
+			expect(failed).toMatchObject({ hold: 0, cause: { kind: "waiting" } });
+			expect(failed.retryIn).toBeUndefined();
+			expect(server.activity.value.references).toBe(1);
+			expect(server.references(Halves).value).toEqual([]);
+			peer.send({ kind: "retry", hold: 0 });
+			expect(await peer.next("loading")).toEqual({ kind: "loading", hold: 0 });
+			expect(await peer.next("failed")).toMatchObject({ hold: 0, cause: { kind: "waiting" } });
+			peer.close();
+			await transported();
+			expect(server.activity.value.references).toBe(0);
+		});
+
+		it("a hold on an object parked on a failed dependency is told each new cause, then loading, then bound", async () => {
+			const Core = local("app.core", { version: 1, params: {}, members: { n: int() } });
+			let cores = 0;
+			const { peer } = await rawLinked((h) => {
+				h.serve(Core, () => {
+					if (++cores < 3) throw new Error(`bug ${cores}`);
+					return { n: constant(cores) };
+				});
+				h.serve(Halves, (_, _principal, self) => {
+					const core = self.get(Core, {});
+					const n = self.state(N);
+					return {
+						variant: "v",
+						members: {
+							n,
+							half: self.derive([core.n], ([c]) => c),
+							set: async () => null,
+							wait: async () => null,
+						},
+					};
+				});
+			});
+			hold(peer, 0, Halves);
+			const waiting = (message: string) => ({
+				kind: "failed",
+				hold: 0,
+				cause: { kind: "waiting", error: { kind: "chord", error: { code: "unavailable", message } } },
+			});
+			// The core failed at load (its first outcome): the parked object names it at once.
+			expect(await peer.next("failed")).toEqual(waiting("waiting for app.core: app.core: bug 1"));
+			// A retry passes on through the parked object to its broken dependency (one host's retry operation).
+			// (Its new attempt failed within the batch of changes the parked object checks once: no loading between.)
+			peer.send({ kind: "retry", hold: 0 });
+			expect(await peer.next("failed")).toEqual(waiting("waiting for app.core: app.core: bug 2"));
+			peer.send({ kind: "retry", hold: 0 });
+			await peer.next("loading");
+			expect((await peer.next("bound")).holds[0]).toMatchObject({ hold: 0 });
+		});
+	});
+
 	describe("a reconnecting consumer", () => {
 		const Tally = remote("app.tally", {
 			version: 1,
@@ -714,4 +775,108 @@ forEachCodec(() => {
 			expect(RETIRING.named(pending.members).t).toEqual([["r", 3]]);
 		});
 	});
+});
+
+/** Lets every pending reaction run (a memory link delivers by microtask). */
+async function flush(): Promise<void> {
+	for (let i = 0; i < 100; i++) await Promise.resolve();
+}
+
+/** A local type nobody serves. */
+const Missing = local("app.missing", { version: 1, params: {}, members: { n: int() } });
+
+describe("retry operations across links (fix rounds 1 and 2, Sol 3)", () => {
+	it.each([1, 9, 50])(
+		"quiesce after %i concurrent Retries round a waiting ring across hosts: each stops after one lap",
+		async (operations) => {
+			type P = { kind: "server" } | { kind: "worker" };
+			const Server = hostKind("app.retry-server");
+			const Worker = hostKind("app.retry-worker");
+			const LocalA = local("app.a", { version: 1, params: {}, members: { n: int() } });
+			const LocalB = local("app.b", { version: 1, params: {}, members: { n: int() } });
+			const RemoteA = remote("app.remote-a", {
+				version: 1,
+				params: {},
+				hostAddress: () => Server(),
+				variants: { reader: { state: { n: int() } } },
+			});
+			const RemoteB = remote("app.remote-b", {
+				version: 1,
+				params: {},
+				hostAddress: () => Worker(),
+				variants: { reader: { state: { n: int() } } },
+			});
+			let retries = 0;
+			const count = (link: Link): Link => ({
+				send: (bytes) => {
+					if (binaryCodec.decode(bytes).kind === "retry") retries++;
+					link.send(bytes);
+				},
+				onMessage: (listener) => link.onMessage(listener),
+				onClose: (listener) => link.onClose(listener),
+				close: () => link.close(),
+			});
+			const [down, up] = memoryLinkPair();
+			const server = createHost<P>({ address: Server(), principal: { kind: "server" }, onError: () => {} });
+			const worker = createHost<P>({ address: Worker(), principal: { kind: "worker" }, onError: () => {} });
+			server.route(
+				Worker,
+				{
+					authorize: () => true,
+					resolve: async () => ({ link: count(down), principal: { kind: "worker" }, trusted: true }),
+				},
+				context,
+			);
+			worker.connect(count(up), { principal: { kind: "server" }, trusted: true }, context);
+			try {
+				const left = server.load(
+					[
+						{
+							name: "@test/a",
+							facet: defineFacet<P>((h) => {
+								h.serve(LocalA, (_, self) => ({ n: self.get(RemoteB, {}).n }));
+								h.serve(RemoteA, (_, _principal, self) => ({
+									variant: "reader",
+									members: { n: self.get(LocalA, {}).n },
+								}));
+							}),
+						},
+					],
+					context,
+				);
+				const right = worker.load(
+					[
+						{
+							name: "@test/b",
+							facet: defineFacet<P>((h) => {
+								h.serve(LocalB, (_, self) => {
+									self.get(Missing, {});
+									return { n: self.get(RemoteA, {}).n };
+								});
+								h.serve(RemoteB, (_, _principal, self) => ({
+									variant: "reader",
+									members: { n: self.get(LocalB, {}).n },
+								}));
+							}),
+						},
+					],
+					context,
+				);
+				await Promise.all([left, right]);
+				await flush();
+				const a = server.hold(LocalA, {}, context);
+				expect(a.state.value).toMatchObject({ kind: "failed", cause: { kind: "waiting" } });
+				// More at once than an object remembers ids: `through` stops each at the object it passed through already.
+				for (let i = 0; i < operations; i++) a.retry();
+				await flush();
+				// Each went round once: server → worker → server, then stopped at the object it started from.
+				expect(retries).toBe(2 * operations);
+				await flush();
+				expect(retries).toBe(2 * operations);
+			} finally {
+				await server.close(context);
+				await worker.close(context);
+			}
+		},
+	);
 });

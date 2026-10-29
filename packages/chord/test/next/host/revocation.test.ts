@@ -1,12 +1,12 @@
 // Tests of revocation (§4, R10, R11): revocation keys, \`host.revoke\` on one host (objects, running calls, activations,
-// holds still waiting for \`load\`), child links and \`revoke\` messages, GC, and revocation across a relay.
+// holds bound or not), child links and \`revoke\` messages, GC, and revocation across a relay.
 
 import { describe, expect, it } from "vitest";
 import { BACKGROUND_CONTEXT as context } from "../../../src/context/index.ts";
-import { int, local, remote } from "../../../src/next/contracts/index.ts";
+import { hostKind, int, local, remote } from "../../../src/next/contracts/index.ts";
 import { createHost, defineFacet, type FacetHost, type Host } from "../../../src/next/host/index.ts";
 import { ChordObject } from "../../../src/next/host/object.ts";
-import { memoryLinkPair } from "../../../src/next/link/index.ts";
+import { type Link, memoryLinkPair } from "../../../src/next/link/index.ts";
 import { jsonPart } from "../../../src/next/link/internal.ts";
 import { constant } from "../../../src/next/state/index.ts";
 import {
@@ -18,6 +18,7 @@ import {
 	RawPeer,
 	rawParent,
 	rawWorkers,
+	rejection,
 	relayed,
 	SERVER_ADDRESS,
 	Server,
@@ -312,6 +313,22 @@ forEachCodec(() => {
 			await host.close(context);
 		});
 
+		it("ends an unbound hold of the principal (refused, waiting for a provider): gone, nothing left of it", async () => {
+			const { host, parent } = await worker();
+			const Absent = { ...Notes, name: "app.absent" } as unknown as typeof Notes;
+			holdAs(parent, 0, S1, Absent);
+			expect(await parent.next("failed")).toMatchObject({ hold: 0, cause: { kind: "waiting" } });
+			expect(host.activity.value.references).toBe(1);
+			parent.send({ kind: "revoke", revocation: { session: "S1" } });
+			expect(await parent.next("gone")).toMatchObject({
+				hold: 0,
+				error: { kind: "chord", error: { code: "forbidden", reason: "revoked" } },
+			});
+			await transported();
+			expect(host.activity.value.references).toBe(0);
+			await host.close(context);
+		});
+
 		it("binds a hold made for a revoked principal, then the parent's revoke after it ends it (race 3, R10's window)", async () => {
 			const { host, parent } = await worker();
 			holdAs(parent, 0, S1);
@@ -441,5 +458,122 @@ describe("revocation across a relay", () => {
 		// The tab's link stayed open: a new hold binds.
 		const again = await relay.tab.get(PlacedNotes, { session: "S1" }, context);
 		expect(again.state.value.kind).toBe("live");
+	});
+});
+
+describe("revocation of this host's own requests over its paths (fix round 1)", () => {
+	type Guest = { kind: "owner" } | { kind: "guest"; grant: string };
+	const There = hostKind("app-there");
+	const Remote = remote("app.remote", {
+		version: 1,
+		params: {},
+		hostAddress: () => There(),
+		variants: { view: { state: {}, methods: {} } },
+	});
+	const guestRevokedBy = (p: Guest) => (p.kind === "guest" ? [p.grant] : []);
+
+	it("ends a guest's ctx.get waiting for its route before any link exists, at once (Astra 1, Sol 1)", async () => {
+		const host = createHost<Guest, string>({
+			principal: { kind: "owner" },
+			revokedBy: guestRevokedBy,
+			onError: () => {},
+		});
+		host.route(There, { authorize: () => true, resolve: () => new Promise(() => {}) }, context);
+		await host.load([], context);
+		let outcome: unknown;
+		void rejection(
+			host.root((ctx) => ctx.get(Remote, {}, { readyTimeout: 60_000 }), context, {
+				principal: { kind: "guest", grant: "g" },
+			}),
+		).then((error) => {
+			outcome = error;
+		});
+		await transported();
+		host.revoke("g", context);
+		await transported();
+		expect(outcome).toMatchObject({ code: "forbidden", reason: "revoked" });
+		await host.close(context);
+	});
+
+	it("never lets the revoked request bind on the route's later link (Astra 1)", async () => {
+		const host = createHost<Guest, string>({
+			principal: { kind: "owner" },
+			revokedBy: guestRevokedBy,
+			onError: () => {},
+		});
+		const gate = Promise.withResolvers<{ link: Link; principal: Guest; trusted: boolean }>();
+		host.route(There, { authorize: () => true, resolve: () => gate.promise }, context);
+		await host.load([], context);
+		const pending = rejection(
+			host.root(
+				async (ctx) => {
+					await ctx.get(Remote, {}, { readyTimeout: 500 });
+					throw new Error("revoked request became live");
+				},
+				context,
+				{ principal: { kind: "guest", grant: "g" } },
+			),
+		);
+		await transported();
+		host.revoke("g", context);
+		const worker = createHost<Guest, string>({
+			address: There(),
+			principal: { kind: "owner" },
+			revokedBy: guestRevokedBy,
+			onError: () => {},
+		});
+		const [up, down] = memoryLinkPair();
+		worker.connect(up, { principal: { kind: "owner" }, trusted: true }, context);
+		const facet = defineFacet<Guest>((h) => h.serve(Remote, () => ({ variant: "view", members: {} })));
+		await worker.load([{ name: "@test/late", facet }], context);
+		gate.resolve({ link: down, principal: { kind: "owner" }, trusted: true });
+		expect(await pending).toMatchObject({ code: "forbidden", reason: "revoked" });
+		await transported();
+		expect(worker.activity.value.references).toBe(0);
+		await host.close(context);
+		await worker.close(context);
+	});
+
+	it("ends a guest's reference over a route link that dropped, and nothing holds it on the next one", async () => {
+		const routed: RawPeer[] = [];
+		const host = createHost<Guest, string>({
+			principal: { kind: "owner" },
+			revokedBy: guestRevokedBy,
+			onError: () => {},
+		});
+		host.route(
+			There,
+			{
+				authorize: () => true,
+				resolve: async () => {
+					const [a, b] = memoryLinkPair();
+					routed.push(new RawPeer(b));
+					return { link: a, principal: { kind: "owner" }, codec: testCodec() };
+				},
+			},
+			context,
+		);
+		await host.load([], context);
+		const states: string[] = [];
+		void host.root(
+			async (ctx) => {
+				const held = await ctx.get(Remote, {}, { readyTimeout: 60_000 }).catch((error: Error) => error);
+				states.push(held instanceof Error ? held.message : "live");
+			},
+			context,
+			{ principal: { kind: "guest", grant: "g" } },
+		);
+		await transported();
+		const first = routed[0]!;
+		await first.next("hold");
+		first.close();
+		await transported();
+		host.revoke("g", context);
+		await transported();
+		expect(states).toEqual(["app.remote: revoked"]);
+		expect(routed.flatMap((peer, i) => (i === 0 ? [] : peer.received.filter(({ kind }) => kind === "hold")))).toEqual(
+			[],
+		);
+		await host.close(context);
 	});
 });

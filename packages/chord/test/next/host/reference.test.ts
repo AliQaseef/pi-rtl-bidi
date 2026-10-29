@@ -613,7 +613,7 @@ describe("keyed state members (slice 6a §12)", () => {
 		await store.close(context);
 	});
 
-	it("a pin load that fails its provider fails the consumer as a dependency failure (transient)", async () => {
+	it("a pin load that fails its provider parks the consumer failed { waiting } on it (a dependency failure)", async () => {
 		const store = await seeded();
 		const { host, errors } = await persistedNotes(store, persistedMemo(2));
 		const provider = await host.get(NoteStore, {}, context);
@@ -621,7 +621,7 @@ describe("keyed state members (slice 6a §12)", () => {
 		await vi.waitFor(() => expect(view.state.value.kind).toBe("failed"));
 		expect(view.state.value).toMatchObject({
 			kind: "failed",
-			cause: { kind: "transient", error: { message: expect.stringContaining("cannot migrate") } },
+			cause: { kind: "waiting", error: { message: expect.stringContaining("cannot migrate") } },
 		});
 		expect(provider.state.value).toMatchObject({ kind: "failed", cause: { kind: "broken" } });
 		expect(errors.map(({ kind }) => kind)).toContain("object_failed");

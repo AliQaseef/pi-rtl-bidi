@@ -727,8 +727,9 @@ describe("on", () => {
 				}, ctx);
 			});
 		});
+		// 0 → 1 → 2 → 3, then the write of 3 changes nothing and nothing calls again (waited for, not timed: Opus F3).
+		await vi.waitFor(() => expect(calls).toBe(4), { timeout: 2_000 });
 		await new Promise((resolve) => setTimeout(resolve, 20));
-		// 0 → 1 → 2 → 3, then the write of 3 changes nothing and nothing calls again.
 		expect(calls).toBe(4);
 	});
 

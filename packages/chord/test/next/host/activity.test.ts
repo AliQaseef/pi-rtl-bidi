@@ -27,6 +27,19 @@ describe("host.activity", () => {
 		expect(server.activity.value.references).toBe(0);
 	});
 
+	it("counts a hold placed here from its arrival, bound or not: a missing provider keeps the worker alive (M§10)", async () => {
+		const { server, client } = await linked(() => {});
+		const missing = client.hold(Notes, { session: "S1" }, context);
+		await transported();
+		expect(missing.state.value).toMatchObject({ kind: "failed", cause: { kind: "waiting" } });
+		expect(server.activity.value.references).toBe(1);
+		// Presence lists bound references only.
+		expect(server.references(Notes).value).toEqual([]);
+		missing.release();
+		await transported();
+		expect(server.activity.value.references).toBe(0);
+	});
+
 	it("counts method calls running on this host, local and remote, until they settle", async () => {
 		const { server, client } = await linked((h) => void serveNotes(h));
 		const remoteRef = await client.get(Notes, { session: "S1" }, context);

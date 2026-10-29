@@ -76,6 +76,7 @@ pattern, no code. Decided cuts are noted where they apply.
 | 3 | park deadline (= `readyTimeout`, C13) | 3b |
 | 3 | `host.activity` (keep-alive counts) | 4b |
 | 3 | `host.root(fn, …)` for code outside objects | 8 |
+| 3 | requests that outlive providers: the destination by address, the publication gate, the unbound index, the check against the selected provider only; the start barrier's first outcomes (decision (a)) | 7a |
 | 4 | principal type `P`, links stamp principals, principal keys in identity | 3a |
 | 4 | revocation (`revokedBy`, `host.revoke`, propagation to children) | 4b |
 | 5 | `local` types: params, members, checked arguments (Q15), results unchecked | 1 |
@@ -85,6 +86,7 @@ pattern, no code. Decided cuts are noted where they apply.
 | 6 | lifecycle, one object per identity, lifetime from kind and params (Q-A), factory, activation, ending | 1 |
 | 6 | failure causes, backoff per identity, dependency recovery (R18) | 2 |
 | 6 | `retryOn` | 8 (first independently living source: registries) |
+| 6 | parked attempts (no dependency deadline or backoff, wakes on every change, retry passing on), `FailureCause` `waiting`, `parked_long` and the authoring rules against cycles | 7a |
 | 6 | cycle rejection on one host (Q5) | 1 |
 | 6 | cycle rejection across hosts (activation chain in hold headers) | 4b |
 | 6 | shared store with per-principal views; worker-wide native owners; natives following a relocation | doc (1, 3, 2) |
@@ -92,6 +94,7 @@ pattern, no code. Decided cuts are noted where they apply.
 | 7 | per-reference watches (released with their reference) | 1 |
 | 7 | `ctx.get` (call-scoped references) | 3a |
 | 7 | `ref.state` (tagged), `ref.retry()`, `host.hold`, calls parking, failed references | 3b |
+| 7 | getters wait through `waiting`; `host.hold` throws only for invalid params | 7a |
 | 7 | `ref.variant` as discriminant, `RefIn` (C15: no `inVariant`/`expectVariant`) | 3a |
 | 7 | `state: false` (C8: cut) | - |
 | 7 | optional dependencies as registries | doc (8) |
@@ -119,6 +122,7 @@ pattern, no code. Decided cuts are noted where they apply.
 | 15 | `defineJob`, `self.job`, intent/run/finish, state documents, dedupe (Q9), `busy`, `running`, blocked `finish` (C3 decided); persistence, resume, restart limit; `accepts` in use | 5 (persistence: 6b; `accepts` and reload: 7) |
 | 16 | `defineFacet<P>`, facet as declarations only (documents and routines removed in 6a) | 1, 6a |
 | 17 | registries: `defineRegistry`, contributions, `compose`, versions (Q8), use-site guards | 8 |
+| 17 | registry readers as parked dependencies (`waiting`), `host.registry` waiting, the last good value dropped when a contribution leaves | 7a |
 | 18 | `constant(value)`, start data as a core object (`SessionInfo`) | 1 (core facet pattern: 4a) |
 | 18 | platform bindings as core objects | doc (8) |
 | 19 | `host.references` (presence) | 4b |
@@ -185,6 +189,12 @@ deleted (the slice's spec and code are the record). Moved here from `carry-over.
   (`local`, empty params) stays broken until the host restarts; slice 7 maps the records to the new version (or blocks
   the old runs) on reload.
 
+- **Publications wake per name** (from slice 7a): `UnboundIndex.wakeAll()` wakes every indexed request, right for the
+  one publication 7a has; a reload's or an install's publication wakes only the requests of the names it serves
+  (`wake(names)`), or every refused hold on the host would re-run its start.
+- **The reload handover of a parked attempt** (from slice 7a): the new attempt's requests bind before the old ones are
+  released (M§3.9); the mechanism (an attempt releasing its predecessor's references after binding its own) was removed
+  in 7a with R18's kept references, its only feeder.
 - **Routines on reload** (from slice 5): the handover per object, bounded by `closeTimeout`; calls do not wait for it.
 - **Jobs on reload** (from slice 5): `accepts` in use (args and result mapped forwards once per run; `blocked
   { version }` without an adapter or for a newer version); when an older run's state document may migrate while its

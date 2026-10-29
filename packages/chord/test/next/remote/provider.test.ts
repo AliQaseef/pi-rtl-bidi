@@ -117,14 +117,14 @@ forEachCodec(() => {
 				{ fingerprint: "0000000000000000" },
 				{ code: "contract_mismatch", message: "app.notes v1 does not match the served v1" },
 			],
-		])("refuse %s with a broken failed", async (_, override, error) => {
+		])("keep %s refused, failed { waiting }", async (_, override, error) => {
 			const { peer } = await notesServer();
 			const { type, ...rest } = override as { type?: string };
 			hold(peer, 0, { ...Notes, name: type ?? Notes.name } as Contract, { session: "S1" }, rest);
-			expect(await peer.next("failed")).toMatchObject({
-				hold: 0,
-				cause: { kind: "broken", error: { kind: "chord", error } },
-			});
+			const failed = await peer.next("failed");
+			expect(failed).toMatchObject({ hold: 0, cause: { kind: "waiting", error: { kind: "chord", error } } });
+			// No backoff window: an event (a publication) wakes it.
+			expect(failed.retryIn).toBeUndefined();
 		});
 
 		it("refuse invalid params with a broken failed", async () => {
@@ -135,7 +135,7 @@ forEachCodec(() => {
 			});
 		});
 
-		it("arriving before load resolved wait for it", async () => {
+		it("arriving before the publication wait for it, and bind before the start barrier is over", async () => {
 			const server = createHost<TestPrincipal>({
 				address: Server(),
 				principal: { kind: "server" },
@@ -505,12 +505,12 @@ forEachCodec(() => {
 	});
 
 	describe("local types over a link", () => {
-		it("never cross one", async () => {
+		it("never cross one: a hold naming one is not served (failed { waiting })", async () => {
 			const Store = local("app.store", { version: 1, params: {}, members: { n: int() } });
 			const { peer } = await rawLinked((h) => h.serve(Store, () => ({ n: constant(1) })));
 			hold(peer, 0, Store, {});
 			expect(await peer.next("failed")).toMatchObject({
-				cause: { kind: "broken", error: { kind: "chord", error: { code: "unavailable" } } },
+				cause: { kind: "waiting", error: { kind: "chord", error: { code: "unavailable" } } },
 			});
 		});
 	});
