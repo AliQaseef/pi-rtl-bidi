@@ -327,12 +327,10 @@ address. A request placed here whose provider is missing is <strong>unbound here
 compares the consumer with the provider actually selected, never with a same-name registration on the consumer&#39;s own
 host (today <code>#assertRoute</code> does that before placement, so worker W1 serving <code>Notes</code> v1 rejects a <code>Notes</code> v2 request
 placed on W2, which serves v2).</p>
-<p>One case keeps today&#39;s rule: a <code>remote</code> type declared <strong>without placement</strong> (allowed by <code>remote()</code>, used in tests and
-for server types a tab reaches through its parent). It goes here if it is served here, otherwise over the parent. A
-request of that kind made before the host has a parent link (a tab loads before it connects) waits here as not served
-and is placed again when the host&#39;s first parent link connects (Opus, Sol); on a host that never connects, the root,
-it stays here. Opus would rather require a placement on every remote type, which is simpler; it removes a supported
-declaration, and the owner asked for no feature to go, so the draft keeps the fallback.</p>
+<p>Every <code>remote</code> type declares its placement (owner, 2026-10-29). Until then <code>remote()</code> allowed leaving it out, a
+leftover of slice 3a, which built remote objects over one link before host kinds existed; such a type went &quot;here if
+served, otherwise the parent&quot;, which needed its own fallback and a re-placement when a tab that loads before it
+connects gets its first parent link (Opus, Sol). Opus and Fable proposed making it required; the owner agreed.</p>
 <h3 id="what-the-check-finds">What the check finds</h3>
 <p>Once placed, the provider found there is checked: served, a fitting version (the current one or an accepted older one,
 with the fingerprint computed from the provider&#39;s own history), <code>authorize</code>, and the provider&#39;s own placement check.
@@ -1932,8 +1930,8 @@ owner&#39;s decisions.</li>
 </tr>
 <tr>
 <td>design §3, placement</td>
-<td>&quot;served here&quot; decides &quot;here&quot;</td>
-<td>the address decides; a remote type without placement keeps today&#39;s rule</td>
+<td>&quot;served here&quot; decides &quot;here&quot;; <code>placement</code> optional on <code>remote()</code></td>
+<td>the address decides; every remote type declares its placement (owner, 2026-10-29)</td>
 </tr>
 <tr>
 <td>the start barrier, <code>pendingLoad</code></td>
@@ -2103,12 +2101,9 @@ holding host closes), never because its provider is missing, went away or does n
 </li>
 <li><p><strong>Placement by address</strong> (round 1): a <code>local</code> type goes here; a <code>remote</code> type with a placement goes to the address
 its placement (computed from the consumer&#39;s own contract) gives: here if that is this host&#39;s address, whether served
-here or not, else over the route for that kind or the parent (design §3). A <code>remote</code> type <strong>without placement</strong> keeps
-today&#39;s rule (round 2: Fable, Opus, Astra; no feature removed): here if served here, otherwise over the parent. A
-request of that kind made before the host has a parent link waits here <code>not_served</code> and is <strong>re-placed when the
-host&#39;s first parent link connects</strong> (round 3: Opus N5, Sol 3: a tab loads before it connects); on a host that never
-connects (the root), it stays here. Opus would rather require a placement on every <code>remote()</code>; that removes a
-supported declaration, so the draft keeps the fallback. A hold arriving for an address that is not this host&#39;s is relayed or
+here or not, else over the route for that kind or the parent (design §3). Every <code>remote</code> type declares
+its placement (owner, 2026-10-29: the optional placement of slice 3a is removed, and with it the fallback &quot;here if
+served, otherwise the parent&quot; and its re-placement at the first parent link). A hold arriving for an address that is not this host&#39;s is relayed or
 refused (<code>invalid/placement</code>) as today; a relay never captures a hold because it serves the same name.</p>
 </li>
 <li><p><strong>Then the selected provider is checked</strong> (served, version or accepted version and fingerprint, <code>authorize</code>, the
@@ -2307,12 +2302,8 @@ unchanged dependency held only by this object must not end in between; today&#39
 <td>the requests bound to it, and their dependents (§3.4)</td>
 </tr>
 <tr>
-<td><strong>a name becomes usable, an install ends, or the first parent link connects, on a host</strong>: a publication (<code>load</code>&#39;s setups, a reload&#39;s commit, an install&#39;s commit) serves a type, a registry, a version; a registry composes or maps a value at a version; an install ends without a commit (rejected)</td>
-<td>the unbound requests indexed under those names; the provider&#39;s <code>installing</code> holds; at the first parent link, the</td>
-</tr>
-<tr>
-<td>no-placement remote requests waiting here; a refused hold re-runs its start and sends <code>loading</code>, then <code>bound</code> or <code>failed</code></td>
-<td></td>
+<td><strong>a name becomes usable, or an install ends, on a host</strong>: a publication (<code>load</code>&#39;s setups, a reload&#39;s commit, an install&#39;s commit) serves a type, a registry, a version; a registry composes or maps a value at a version; an install ends without a commit (rejected)</td>
+<td>the unbound requests indexed under those names; the provider&#39;s <code>installing</code> holds; a refused hold re-runs its start and sends <code>loading</code>, then <code>bound</code> or <code>failed</code></td>
 </tr>
 </tbody></table>
 <p>No new message kind for wakes: <code>loading</code>, <code>bound</code>, <code>failed</code> and <code>retry</code> exist. The wire&#39;s <code>failed</code> carries the new cause

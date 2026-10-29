@@ -63,12 +63,9 @@ A needs W's B, B needs S's C; W's hold for C waits for S's whole `load`, which w
   holding host closes), never because its provider is missing, went away or does not fit.
 - **Placement by address** (round 1): a `local` type goes here; a `remote` type with a placement goes to the address
   its placement (computed from the consumer's own contract) gives: here if that is this host's address, whether served
-  here or not, else over the route for that kind or the parent (design §3). A `remote` type **without placement** keeps
-  today's rule (round 2: Fable, Opus, Astra; no feature removed): here if served here, otherwise over the parent. A
-  request of that kind made before the host has a parent link waits here `not_served` and is **re-placed when the
-  host's first parent link connects** (round 3: Opus N5, Sol 3: a tab loads before it connects); on a host that never
-  connects (the root), it stays here. Opus would rather require a placement on every `remote()`; that removes a
-  supported declaration, so the draft keeps the fallback. A hold arriving for an address that is not this host's is relayed or
+  here or not, else over the route for that kind or the parent (design §3). Every `remote` type declares
+  its placement (owner, 2026-10-29: the optional placement of slice 3a is removed, and with it the fallback "here if
+  served, otherwise the parent" and its re-placement at the first parent link). A hold arriving for an address that is not this host's is relayed or
   refused (`invalid/placement`) as today; a relay never captures a hold because it serves the same name.
 - **Then the selected provider is checked** (served, version or accepted version and fingerprint, `authorize`, the
   provider's own placement check). Version checks never look at a same-name registration elsewhere.
@@ -178,8 +175,7 @@ through, or recovers by its own backoff.
 | Event | Re-evaluates |
 | --- | --- |
 | **a target changes state**: a dependency's object goes live, loading, fails, gets a new cause or ends; a hold's `bound`, `loading`, `failed` arrive, also after a re-hold on a new link | the requests bound to it, and their dependents (§3.4) |
-| **a name becomes usable, an install ends, or the first parent link connects, on a host**: a publication (`load`'s setups, a reload's commit, an install's commit) serves a type, a registry, a version; a registry composes or maps a value at a version; an install ends without a commit (rejected) | the unbound requests indexed under those names; the provider's `installing` holds; at the first parent link, the
-no-placement remote requests waiting here; a refused hold re-runs its start and sends `loading`, then `bound` or `failed` |
+| **a name becomes usable, or an install ends, on a host**: a publication (`load`'s setups, a reload's commit, an install's commit) serves a type, a registry, a version; a registry composes or maps a value at a version; an install ends without a commit (rejected) | the unbound requests indexed under those names; the provider's `installing` holds; a refused hold re-runs its start and sends `loading`, then `bound` or `failed` |
 
 No new message kind for wakes: `loading`, `bound`, `failed` and `retry` exist. The wire's `failed` carries the new cause
 kind `waiting`; `loading` and a `waiting` `failed` carry the provider's attempt id for the probe (§7).
