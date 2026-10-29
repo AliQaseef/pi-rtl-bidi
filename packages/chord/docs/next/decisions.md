@@ -1771,6 +1771,14 @@ validation and copies the v2 kernel added around Delta.
   setups a registry without a value cannot get one before a reload, so a reader then fails at once `transient`
   (`unavailable/undeclared`) and is retried when the registry gets its first value (R18), as `self.get` of a type not
   served here fails at once (refined 2026-10-27 after the second spec review: no `readyTimeout` wait at start); once live, a later failure of the registry changes nothing (last good value).
+- **Getters wait through `waiting` (owner, 2026-10-29: "(b) with a default seems fine; UI stays responsive anyways
+  because it usually holds instead of get"; dependency model, decision 2):** `host.get`, `ctx.get` and `host.registry`
+  wait while the reference is `loading`, `failed { transient }` or `failed { waiting }`, bounded by their
+  `readyTimeout` (default 60 s; callers choose their own), and reject at the deadline with the last cause; only
+  `failed { broken }` rejects at once. Calls stay as they are: on a `loading` reference they park, bounded; on a
+  `failed` one (any cause) they reject at once. A UI holds (`host.hold`) and shows `ref.state`; code that needs the
+  object now gets it. Reviewers: Fable (b, calls included), Opus (a, plus a `whenLive` helper), Sol leaning (c, callers
+  park until their own context aborts), Astra pending.
 - **Only hosts with an address serve remote types (owner, 2026-10-29: "b"):** a host serving a `remote` type needs an
   address and a principal; `load` refuses a facet that serves one on a host without an address (until now a host with
   a principal but no address served remote types and placed every one of them "here"). So "here" is decided by the
