@@ -2,12 +2,13 @@
 title: Slice 7b: reloading plugins in a running Chord app
 cover: Slice 7b / Reload
 kicker: A design brief · Chord v2 · slice 7b · 2026-10-29
-subtitle: What happens to objects, references, jobs and registries when a plugin's code changes on one host or across many, what is decided and what the owner still decides
+subtitle: What a plugin is, how it is built and loaded, how a mini p2 is assembled from Chord, and what happens when a plugin's code changes on one host or across many
 stats:
   - 4 | steps of a reload on one host
   - 3 | fates of a live object
   - 26 | carry-over items from slices 3a to 7a
-  - 5 | decisions open
+  - 11 ms | to rebuild one facet after an edit
+  - 6 | decisions open
 note: |
   A brief before the slice 7b spec, written by the redesign session from `design.md` §21, the dependency model
   (`dependencies/model.md`, decided and built for 7a in pi `339847eb1`), the carry-over in `slices.md` and the code at
@@ -26,7 +27,7 @@ Chord v2 can do everything around that today: objects, references across hosts, 
 7a a dependency model in which a missing provider is a wait, not an error. What it cannot do yet is change code. `load`
 runs once per host (`host.ts`: "load runs once per host"). Slice 7b adds the reload, on one host and across hosts.
 
-## Six things to know
+## Eight things to know
 
 :::findings
 1. **A reload is a transaction per host.** Load the bundles, stage the new declarations, commit atomically, then let
@@ -39,8 +40,12 @@ runs once per host (`host.ts`: "load runs once per host"). Slice 7b adds the rel
    not fit waits (7a), it is not ended.
 5. **7a already decided most of the hard part.** Removal, dropped versions and installs are waits woken by a
    publication; a reload's commit is such a publication.
-6. **Five points are open:** the reload API, the rollout across hosts, loader D, a `writable` across a swap, and the
-   install watchdog.
+6. **A plugin is a directory with a `package.json` and one file per surface.** Each facet is bundled alone; host
+   packages are passed in, never copied; a whole plugin set builds in a few hundred milliseconds.
+7. **Chord should ship the app kit** (proposed): loader, HTTP, workers, web, TUI and dev reload as optional
+   components, so a mini p2 is a page of code.
+8. **Six points are open:** the reload API, the rollout across hosts, a `writable` across a swap, the install
+   watchdog, where the loader lives, and the app kit.
 :::
 
 ## Words used throughout
@@ -50,6 +55,332 @@ A **reload** changes the code of one or more plugins on one host. A **facet** is
 `self` without activating anything. The **commit** switches the host to the new code at once and is a **publication**
 in 7a's sense. A **pure** object has no natives (`self.open`), in its old or its new code. A **rollout** is a reload
 of the same code set on every host, server first.
+
+# A Plugin, File by File {#plugin lede="What a plugin looks like on disk, and what each file is for."}
+
+A plugin is a directory. Its name is its `package.json` name; its code is one file per host kind it runs on, a
+**facet**; everything else is ordinary TypeScript the facets import. This is p2's layout today (`apps/p2/plugins/*`),
+plus the `package.json` that loader D needs (p2's `plugin-loading.md` §8; p2's built-in plugins have none yet and are
+named by their directory).
+
+```text
+plugins/notes/
+  package.json        name = the plugin's name; peerDependencies = host packages; dependencies = bundled npm deps
+  contract.ts         the plugin's object types and registries (shared by its facets and by other plugins)
+  server.ts           facet for the server     (default export: defineFacet(...))
+  worker.ts           facet for session workers
+  web.tsx             facet for browser tabs
+  tui.ts              facet for the TUI
+  store.ts            plain modules the facets import
+  NoteList.tsx
+  notes.css
+  assets/
+    template.md       files the plugin ships (read at runtime, or offered for download)
+    icon.svg
+  skills/notes/SKILL.md   optional resources (p2 §4.4)
+```
+
+```json
+{
+  "name": "@pi/notes",
+  "version": "1.4.0",
+  "type": "module",
+  "peerDependencies": {
+    "@earendil-works/chord": "^2",
+    "@earendil-works/pi-durable": "^1",
+    "react": "^19"
+  },
+  "dependencies": {
+    "marked": "16.4.1"
+  }
+}
+```
+
+- **`name`** identifies the plugin everywhere: its facets, its registry contributions, diagnostics, reloads.
+- **`peerDependencies`** are **host packages**: the running app supplies them, one instance per process (one Chord,
+  one React; `instanceof ChordError` and React hooks only work that way). The bundler never copies them.
+- **`dependencies`** are the plugin's own npm packages (`marked`): installed into the plugin's `node_modules` with
+  `--ignore-scripts` and bundled into every facet that imports them.
+- **No `tsconfig.json` is needed.** The bundler strips types and does not type-check; JSX is compiled with the
+  automatic React runtime, a fixed setting of the loader. A plugin may keep a `tsconfig.json` for its editor and for
+  `tsc --noEmit` (the SDK ships one to extend); the loader ignores it.
+
+A facet only declares (chapter III of the model): it serves object types, serves or contributes to registries, and
+returns nothing.
+
+```ts
+// plugins/notes/contract.ts
+import { defineRegistry, local, remote, str, obj, arr, method } from "@earendil-works/chord/next";
+import { Session } from "@app/core";                        // the app's host kinds, a host package
+export const NoteStore = local("notes.store", { version: 1, params: {}, members: { /* … */ } });
+export const Notes = remote("notes", {
+  version: 2,
+  params: { session: str() },
+  hostAddress: ({ session }) => Session({ id: session }),
+  variants: { editor: { state: { list: arr(obj({ id: str(), text: str() })) }, methods: { add: method(obj({ text: str() })) } } },
+});
+
+// plugins/notes/worker.ts
+import { defineFacet } from "@app/core";                    // bound to the app's principal type
+import { NoteStore, Notes } from "./contract.ts";
+import { serveStore } from "./store.ts";
+export default defineFacet((host) => {
+  host.serve(NoteStore, serveStore);
+  host.serve(Notes, ({ session }, principal, self) => { /* … */ });
+});
+
+// plugins/notes/web.tsx
+import { defineFacet } from "@app/core";
+import { NoteList } from "./NoteList.tsx";                  // a React component, bundled
+import "./notes.css";                                       // bundled into the facet's stylesheet
+export default defineFacet((host, self) => {
+  self.contribute(Panels, { notes: NoteList });             // the app's UI registry
+});
+```
+
+# Building and Loading {#loading lede="How the bundler knows what to pull in, and how the code gets into a running process."}
+
+Each facet is built on its own, as one script. The bundler starts at the facet file and follows its imports:
+
+| An import of | Becomes |
+| --- | --- |
+| the plugin's own files (`./store.ts`, `./NoteList.tsx`) | inlined into the facet's script |
+| another plugin's contract (`../sessions/contract.ts`, or `@pi/sessions/contract` for an installed package) | inlined too: a copy, so a plugin carries the contract version it was built against (`accepts` needs that); only contracts and side-effect-free modules may be imported across plugins |
+| an npm package in `dependencies` (`marked`) | inlined, resolved from the plugin's own `node_modules` |
+| a host package (`@earendil-works/chord/next`, `react`, `@app/core`, …) | **external**: a parameter of the script, the host's instance at load time |
+| a Node builtin (`node:fs`) | external, through the `require` the loader passes (server and worker facets only; a web facet that imports one fails to build) |
+| CSS (`import "./notes.css"`) | collected into one stylesheet per web facet |
+| an asset by URL (`import iconUrl from "./assets/icon.svg?url"`) | a content-hashed file served by the app; the import is its URL |
+
+The built script is a function of its host packages. That is the whole trick of loader D: there is no module map, no
+second copy of Chord, and an old version is garbage-collected once nothing holds its closures.
+
+```js
+// what the bundler emits for plugins/notes/worker.ts (simplified)
+(function (require, __files) {
+  const { defineFacet } = require("@app/core");             // the host's instance
+  const { local, remote, str } = require("@earendil-works/chord/next");
+  const { marked } = /* marked's code, inlined */;
+  /* contract.ts, store.ts, inlined */
+  return defineFacet((host) => { /* … */ });
+})
+```
+
+```ts
+// the loader (proposed @earendil-works/chord/next/loader), Node side
+import { buildFacet, evaluateFacet } from "@earendil-works/chord/next/loader";
+
+const HOST_PACKAGES = {                                     // the app's base bundle exports these
+  "@earendil-works/chord/next": chordNext, "@earendil-works/pi-durable": durable,
+  "@app/core": core, react, "react/jsx-runtime": jsxRuntime,
+};
+const script = await buildFacet({ plugin: "/data/plugins/notes", facet: "worker.ts", hostPackages: Object.keys(HOST_PACKAGES), platform: "node" });
+const facet = evaluateFacet(script, { hostPackages: HOST_PACKAGES, require: createRequire(import.meta.url), dir: "/data/plugins/notes" });
+await host.reload([{ name: "@pi/notes", facet }], ctx);    // or host.load the first time
+```
+
+- `buildFacet` is esbuild with: the facet as entry, the host packages and `node:*` external, `format: "cjs"` wrapped
+  as the function above, minified, an `onResolve` that refuses anything outside the plugin, its `node_modules`, a
+  contract of another plugin or a host package. It returns the script, its content hash and esbuild's metafile (the
+  dev loop knows which files a facet used).
+- `evaluateFacet` runs the script with `vm.Script` and a stable filename per (facet, hash) on Node, or as a classic
+  `<script>` in the browser (the page fetches the script and its stylesheet by hash, which caches forever).
+- **Imports a plugin cannot use:** dynamic `import()` (resolved at build, or not at all), top-level `await` (a facet is a
+  synchronous declaration), `require` of anything but builtins.
+
+:::review | Open 5: where the loader lives
+(a) Chord ships `chord/next/loader` (discovery, `buildFacet`, `evaluateFacet`, `pluginFile`), an app chooses its host
+packages; (b) Chord knows only `host.reload(facets)` and the app bundles and evaluates. Recommended: (a); the kernel
+stays free of it, and Durable Objects (no `eval`) compose statically as before.
+:::
+
+# Assets and Files {#assets lede="Files a plugin ships: bundled into the browser, read at runtime, or offered for download."}
+
+A plugin has files that are not code. They fall into three cases.
+
+**1. Imported by a web facet.** CSS, images, wasm. The bundler emits them as content-hashed files next to the facet's
+script, and the import evaluates to their URL. The app serves the bundle's files under one path; p2 does exactly this
+today for the terminal's wasm (`plugins/terminals/Terminal.tsx`: `import ghosttyWasm from
+"../../vendor/ghostty/ghostty-vt.wasm?url"`, served under `/__p2_web/`).
+
+```tsx
+import iconUrl from "./assets/icon.svg?url";
+export const NoteIcon = () => <img src={iconUrl} alt="" />;
+```
+
+**2. Read at runtime by a server or worker facet.** A template, a wasm module for a native, a script a native runs. A
+bundled script has no meaningful `import.meta.url` (today's `plugins/terminals/main.ts` reads its wasm with
+`new URL("../../vendor/…", import.meta.url)`). The loader passes the plugin's directory, and a helper resolves a path
+inside it, refusing `..` out of it:
+
+```ts
+// plugins/notes/worker.ts
+import { pluginFile } from "@earendil-works/chord/next/loader";   // reads the directory the loader passed
+const template = await readFile(pluginFile("assets/template.md"), "utf8");
+```
+
+**3. Offered for download over HTTP.** A plugin contributes a route to the app's HTTP registry; the handler opens the
+file through the same helper and streams it, with the plugin's own authorization:
+
+```ts
+// plugins/notes/server.ts
+export default defineFacet((host, self) => {
+  self.contribute(Http, {
+    routes: {
+      "GET /notes/template.md": async (request, ctx) => {
+        if (ctx.principal.kind !== "owner") return { kind: "error", status: 403 };
+        const path = pluginFile("assets/template.md");
+        const { size } = await stat(path);
+        return { kind: "bytes", name: "template.md", mime: "text/markdown", size, read: (offset, length) => readRange(path, offset, length) };
+      },
+    },
+  });
+});
+```
+
+So yes: a plugin can offer its files for download, because the loader tells it where it lives. Each facet sees only its
+own plugin's directory; nothing gives it another plugin's files.
+
+# HTTP {#http lede="What Chord provides, what p2 has, and what p3 needs."}
+
+**Chord v2 has no HTTP server today.** Design §23 designs one (`@earendil-works/chord/next/http`) and defers it until
+"the kernel fixes and a first real proof" are done. p2's HTTP is its own, about 30 lines of helpers plus the server host:
+
+```ts
+// apps/p2/src/runtime/server.ts (p2 today, Chord v1)
+export const Routes = defineRegistry<RouteHandler>("p2.routes", { conflict: "error" });        // "METHOD /path" → handler
+export const Upgrades = defineRegistry<UpgradeHandler>("p2.upgrades", { conflict: "error" });   // WebSocket upgrades
+export const RequestResolvers = defineRegistry<RequestResolver>("p2.request-resolvers", { conflict: "error" });
+type RouteHandler = (request: IncomingMessage, response: ServerResponse, access: RequestAccess, ctx: Ctx) => void | Promise<void>;
+```
+
+Plugins contribute handlers that write to Node's `ServerResponse` themselves; the files plugin implements ranges,
+download headers and previews by hand (`plugins/files/server.ts`).
+
+The designed component (§23) replaces raw responses with descriptions, so every plugin gets ranges (206/416), `HEAD`,
+safe download headers, streaming and abort on disconnect from one place:
+
+```ts
+export const Http = defineRegistry<HttpContribution, Router>("chord.http", { version: 1 });
+type HttpContribution = { routes?: Record<string, Route>; wraps?: Wrap[] };
+type Route = (req: HttpRequest, ctx: Ctx) => Promise<HttpResponse>;   // ctx.principal: the request's principal
+type HttpResponse =
+  | { kind: "json"; value: JsonValue } | { kind: "page"; title: string; body: string }
+  | { kind: "bytes"; name: string; mime: string; size: number; read(offset: number, length: number): Promise<Uint8Array> }
+  | { kind: "redirect"; to: string } | { kind: "error"; status: number };
+```
+
+- Routes compose by `keyedEntries`: a duplicate pattern is a reported conflict, the first by plugin name wins.
+- Wraps (middleware) run in phases the owner defines (`observe`, `headers`, `transform`), by default only around their
+  own plugin's routes.
+- Request resolvers (who sent a request: cookie, loopback, relay) are hooks; WebSocket byte channels for terminals are
+  a separate component.
+
+# Performance {#perf lede="Measured on slayer, Node 24, esbuild from the repo, p2's plugins as they are."}
+
+Built with the loader D settings above (each facet alone, host packages and `apps/p2/src` external, minified), on
+p2's real plugins:
+
+| Measurement | Result |
+| --- | --- |
+| all 25 worker facets, one script each, cold | 237 ms, 294 KB in total, largest `models/worker.ts` 35 KB |
+| all 20 server facets, cold | 167 ms, 236 KB |
+| all 17 web facets, cold | 144 ms, 912 KB, of which 688 KB is the terminal's wasm |
+| one facet rebuilt after an edit (esbuild context, warm) | 11 ms |
+| compile and evaluate all 25 worker scripts (`vm.Script`) | 23 ms |
+| worker spawn to ready, p2 today (TypeScript through the source resolver, `nodeLoader`) | 549 ms (p2's measurement, `plugin-loading.md` §14.1) |
+| the same with one bundle per worker plugin set | 218 ms |
+| base bundle plus one script per plugin through ESM (model B) | 254 ms; D is expected near it |
+
+The plugins are small; the time goes into the host packages and the runtime (85% of a worker's load time, p2 §14.1),
+which the base bundle loads once per process. A reload of one plugin costs one rebuild (about 11 ms warm) and one
+evaluation (about 1 ms per facet), then Chord's reload. The memory caveat is V8's compilation cache: every distinct
+compiled script stays cached, so scripts get a stable name per (facet, hash) and hosts that reload in place run with
+the cache off (+0.1 MiB instead of +5.6 MiB per 100 reloads, p2's measurement).
+
+# A Mini p2 from Chord {#kit lede="The owner: building a small p2 with a web and a TUI surface and plugins should be trivial from Chord; optional components should come out of the box."}
+
+p2 has about 10,700 lines of host code in `apps/p2/src/hosts` and its runtime: the server's HTTP and WebSocket
+entry, the worker supervisor, plugin discovery, the web and TUI bundles, the web shell, the TUI sandbox and launcher,
+the reload control. Almost none of it is p2-specific. The proposal: Chord ships it as optional components, each a
+subpath an app imports only if it wants it, none of them in Chord's kernel.
+
+## What it would look like
+
+```ts
+// server.ts: a whole app with plugins, a web and a TUI surface
+import { createHost } from "@earendil-works/chord/next";
+import { discoverPlugins, pluginLoader } from "@earendil-works/chord/next/loader";
+import { httpServer } from "@earendil-works/chord/next/http";
+import { workerRoute } from "@earendil-works/chord/next/workers";
+import { webSurface } from "@earendil-works/chord/next/web";
+import { tuiSurface } from "@earendil-works/chord/next/tui";
+import { devReload } from "@earendil-works/chord/next/dev";
+import { Server, Session, core } from "./core.ts";              // the app's base code: host kinds, principals, core facet
+
+const plugins = await discoverPlugins(["./plugins", join(dataDir, "plugins")]);
+const loader = pluginLoader({ hostPackages: core.hostPackages });
+
+const server = createHost<P>({ address: Server(), principal: { kind: "server" }, onError });
+server.route(Session, workerRoute({ entry: "./worker.ts", idleMs: 300_000, authorize: core.authorize }), ctx);
+await server.load([core.serverFacet, ...(await loader.facets(plugins, "server"))], ctx);
+
+const http = httpServer(server, { port: 4321, authenticate: core.authenticate });   // routes from the Http registry
+http.surface(webSurface({ loader, plugins, shell: core.webShell }));                  // /: the page, its bundle, its socket
+http.surface(tuiSurface({ loader, plugins }));                                        // the TUI launcher's bundle and socket
+devReload({ server, loader, plugins, watch: true });                                 // a changed plugin reloads everywhere
+```
+
+```ts
+// worker.ts
+import { workerMain } from "@earendil-works/chord/next/workers";
+await workerMain(async ({ address, init, parent }) => {
+  const worker = createHost<P>({ address, principal: { kind: "worker", session: init.id }, onError });
+  worker.connect(parent, { principal: { kind: "server" }, trusted: true }, ctx);
+  await worker.load([core.workerFacet(init), ...(await loader.facets(init.plugins, "worker"))], ctx);
+  return worker;
+});
+```
+
+```tsx
+// core.ts, the web shell: the app decides the layout; plugins fill registries
+export const Panels = defineRegistry<Record<string, ComponentType>, Panel[]>("app.panels", { version: 1 });
+export const webShell = ({ host }: ShellProps) => {
+  const panels = useRegistry(host, Panels);                     // from chord/next/web: a hook over a registry value
+  return <Tabs>{panels.map((p) => <p.component key={p.name} />)}</Tabs>;
+};
+```
+
+And a plugin is what chapter I shows: a directory, a `package.json`, facets that serve types and contribute to the
+app's registries (`Http`, `Panels`, a TUI command list).
+
+## The components
+
+| Subpath | What it does | Replaces in p2 |
+| --- | --- | --- |
+| `chord/next/loader` | `discoverPlugins` (directory listing, `package.json` names, no parsing), `buildFacet` (esbuild, host packages external), `evaluateFacet` (Node `vm`, browser `<script>`), `pluginFile`, npm/git install with `--ignore-scripts` | `src/hosts/plugins.ts`, `bundles.ts`, the source resolver, `nodeLoader` |
+| `chord/next/http` | the Node HTTP server, the `Http` registry (routes, wraps, request resolvers, responses as descriptions: ranges, downloads, `HEAD`), WebSocket entry calling `host.accept` | `src/hosts/server.ts` (HTTP part), `runtime/http.ts`, `Routes`, `Upgrades`, `RequestResolvers` |
+| `chord/next/workers` | `workerRoute` (fork a worker per address, IPC link, start message, idle stop from `host.activity`, crash restart with backoff), `workerMain` (the child's side) | `SessionHosts` in `runtime/server.ts`, `hosts/worker.ts` |
+| `chord/next/web` | the page host (connect over a WebSocket with reconnect, load web facets from their scripts, React provider and hooks: `useObject` over `host.hold`, `useRegistry`, `useWatch`), serving the bundle by hash, reload on a new manifest | `hosts/web/*`, `runtime/web.tsx`, `src/web/reconnect.ts` |
+| `chord/next/tui` | the TUI launcher and sandbox (pi-tui, the bundle download, a link over the launcher's socket), slots and commands as registries | `hosts/tui-*.ts`, `runtime/tui.ts` |
+| `chord/next/dev` | the source watcher marking plugins dirty, the reload control (`reload(plugins)` on every host in order: server, workers, then a manifest bump for pages and the TUI) | `performReload` in `hosts/server.ts`, the dev protocol |
+
+Each is ordinary code on top of Chord's public API: nothing in the kernel depends on it, a Durable Object deployment
+uses none of it, and an app can replace any one (its own HTTP server, its own shell). React is a host package of the web
+component, pi-tui of the TUI component; an app without them never imports them.
+
+## What stays the app's
+
+The principal type and authentication; the host kinds (`Server`, `Session`) and what a worker's start message holds;
+the core facet and core objects (catalog, harness); the web shell's layout and the TUI's look; which registries plugins
+contribute to beyond `Http`. That is roughly what p3's base code should be: a few hundred lines, not ten thousand.
+
+:::review | Open 6: the app kit
+(a) Chord ships these six components as optional subpaths of `@earendil-works/chord`, built in this order: `loader`
+and `dev` with 7b (reload needs them), `http` and `workers` next (p3 needs them first), `web` and `tui` after (lifted
+from p2's code, which works today). (b) Chord ships only `loader`; the rest is p3's base code. Recommended: (a), as the
+owner asked; each component gets its own slice spec and review, after 7b and before slice 9 or alongside p3's base.
+:::
 
 # One Host Reloads {#host lede="Four steps, all or nothing up to the commit."}
 
@@ -249,40 +580,6 @@ host stays on its old code; (b) no Chord timer: the app's context bounds the rel
 context like everything else, and the app passes its deadline; a host option would be the only timer left in reload.
 :::
 
-# Loader D {#loader lede="How a plugin's new code gets into a running process."}
-
-p2 designed it (`apps/p2/docs/plugin-loading.md` §9, §14); Chord has not built it. **Decided in p2's design:**
-
-- **One base bundle per surface** holds every host package once: Chord, Durable, pi-ai, pi-tui, TypeBox, React and
-  `react-dom`, plus the app's runtime. A change to it restarts the hosts.
-- **One script per facet**, an esbuild bundle wrapped as a function of its host packages, which are external and
-  passed in, so there is one Chord and one React per process:
-
-  ```js
-  // notes/worker.facet.js, built
-  (require, chord, durable, react) => {
-    const { defineFacet, local, str } = chord;   // the host's instance, not a copy
-    /* the plugin's own files, contracts included (bundled: their versions are the plugin's) */
-    return defineFacet((host, self) => { … });
-  }
-  ```
-
-- **Evaluation:** `vm.Script.runInThisContext` on Node (server, workers, TUI worker), a classic `<script>` plus one CSS
-  file in the browser. No module map: an old generation is closures the GC reclaims once nothing holds them.
-- **Stable script names** per (facet, content digest), with V8's compilation cache off on hosts that reload in place
-  (measured: every distinct compile otherwise stays in memory, +5.6 MiB per 100 compiles of 72 KB).
-- **Contracts are never host packages:** each facet bundles its own contract version, or `accepts` would never apply.
-- **Blockers** to solve: `instanceof` across plugins, plugin files shared between plugins (copied with their module
-  state), `import.meta.url`, Node builtins through the passed `require`, CSS and wasm assets.
-
-:::review | Open 5: where loader D lives
-(a) Chord ships the facet-script format, its evaluation (Node `vm`, browser `<script>`) and an esbuild helper that
-marks host packages external; an app chooses its host packages. (b) Chord knows only `host.reload(facets)`;
-bundling and evaluation are entirely the app's (p3's base code). Recommended: (a): every Chord app gets live reload,
-and the blockers are solved once; Chord's kernel stays free of it (a separate subpath, `@earendil-works/chord/next/loader`),
-so Durable Objects, which forbid `eval`, compose statically as before.
-:::
-
 # Decisions {.epilogue lede="What is settled for the spec, and what the owner decides first."}
 
 **Decided** (spec material): the four steps and rollback per host; the three fates and the parking of a swap with a
@@ -291,7 +588,8 @@ ids on restart; broken objects retried on reload; the handover of a parked attem
 re-subscribed or freshly bound; unbound `version` and `not_served` instead of `gone`; old-version calls and adapted
 bindings as diffs; `accepts` in `host.serve`; jobs' version mapping, `blocked { version }` and retries on reload, runs
 aborted on a native restart; registries swapped in one batch; rollout order, serialized installs, the digest,
-`installing`, installs never waiting for activations; loader D's design.
+`installing`, installs never waiting for activations; loader D's design: one script per facet, host packages passed in,
+contracts bundled, no module map, stable script names, plugins' npm dependencies installed with `--ignore-scripts`.
 
 **Open** for the owner:
 
@@ -302,3 +600,4 @@ aborted on a native restart; registries swapped in one batch; rollout order, ser
 | 3 | who runs the rollout: a Chord protocol, or the app calling `host.reload` per host | the app |
 | 4 | the install watchdog: a host option `installTimeout`, or the app's context | the app's context |
 | 5 | where loader D lives: Chord (`chord/next/loader`), or the app | Chord |
+| 6 | the app kit: Chord ships loader, HTTP, workers, web, TUI and dev reload as optional subpaths, or only the loader | Chord ships them, in that order |

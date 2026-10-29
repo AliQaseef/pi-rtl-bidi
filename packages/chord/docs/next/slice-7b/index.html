@@ -111,8 +111,8 @@ table{max-width:100%}
 <section class="cover">
   <div class="kicker">A design brief · Chord v2 · slice 7b · 2026-10-29</div>
   <h1>Slice 7b<br>Reload</h1>
-  <p class="subtitle">What happens to objects, references, jobs and registries when a plugin&#39;s code changes on one host or across many, what is decided and what the owner still decides</p>
-  <div class="cover-stats"><div class="stat"><b>4</b><span>steps of a reload on one host</span></div><div class="stat"><b>3</b><span>fates of a live object</span></div><div class="stat"><b>26</b><span>carry-over items from slices 3a to 7a</span></div><div class="stat"><b>5</b><span>decisions open</span></div></div>
+  <p class="subtitle">What a plugin is, how it is built and loaded, how a mini p2 is assembled from Chord, and what happens when a plugin&#39;s code changes on one host or across many</p>
+  <div class="cover-stats"><div class="stat"><b>4</b><span>steps of a reload on one host</span></div><div class="stat"><b>3</b><span>fates of a live object</span></div><div class="stat"><b>26</b><span>carry-over items from slices 3a to 7a</span></div><div class="stat"><b>11 ms</b><span>to rebuild one facet after an edit</span></div><div class="stat"><b>6</b><span>decisions open</span></div></div>
   <div class="cover-note"><p>A brief before the slice 7b spec, written by the redesign session from <code>design.md</code> §21, the dependency model
 (<code>dependencies/model.md</code>, decided and built for 7a in pi <code>339847eb1</code>), the carry-over in <code>slices.md</code> and the code at
 <code>339847eb1</code>. Marks: <strong>Decided</strong> points cite the decision; <strong>Open</strong> points are the owner&#39;s, with a recommendation.</p>
@@ -120,13 +120,18 @@ table{max-width:100%}
 </section><div class="inner">
 <nav class="toc"><h2>Contents</h2><ol>
 <li><a href="#before-we-begin">Before we begin</a></li>
-<li><a href="#host">I. One Host Reloads</a></li>
-<li><a href="#fates">II. Three Fates</a></li>
-<li><a href="#consumers">III. Consumers Across a Reload</a></li>
-<li><a href="#jobs">IV. Jobs Across a Reload</a></li>
-<li><a href="#registries">V. Registries Across a Reload</a></li>
-<li><a href="#rollout">VI. Across Hosts</a></li>
-<li><a href="#loader">VII. Loader D</a></li>
+<li><a href="#plugin">I. A Plugin, File by File</a></li>
+<li><a href="#loading">II. Building and Loading</a></li>
+<li><a href="#assets">III. Assets and Files</a></li>
+<li><a href="#http">IV. HTTP</a></li>
+<li><a href="#perf">V. Performance</a></li>
+<li><a href="#kit">VI. A Mini p2 from Chord</a></li>
+<li><a href="#host">VII. One Host Reloads</a></li>
+<li><a href="#fates">VIII. Three Fates</a></li>
+<li><a href="#consumers">IX. Consumers Across a Reload</a></li>
+<li><a href="#jobs">X. Jobs Across a Reload</a></li>
+<li><a href="#registries">XI. Registries Across a Reload</a></li>
+<li><a href="#rollout">XII. Across Hosts</a></li>
 <li><a href="#decisions">Decisions</a></li>
 </ol></nav>
 
@@ -139,7 +144,7 @@ restarting a single process.</p>
 <p>Chord v2 can do everything around that today: objects, references across hosts, the store, jobs, registries, and since
 7a a dependency model in which a missing provider is a wait, not an error. What it cannot do yet is change code. <code>load</code>
 runs once per host (<code>host.ts</code>: &quot;load runs once per host&quot;). Slice 7b adds the reload, on one host and across hosts.</p>
-<h3 id="six-things-to-know">Six things to know</h3>
+<h3 id="eight-things-to-know">Eight things to know</h3>
 <ol class="findings">
 <li><strong>A reload is a transaction per host.</strong> Load the bundles, stage the new declarations, commit atomically, then let
 each object follow; any code error before the commit leaves the host entirely on its old code.</li>
@@ -151,8 +156,12 @@ calls see the new code.</li>
 not fit waits (7a), it is not ended.</li>
 <li><strong>7a already decided most of the hard part.</strong> Removal, dropped versions and installs are waits woken by a
 publication; a reload&#39;s commit is such a publication.</li>
-<li><strong>Five points are open:</strong> the reload API, the rollout across hosts, loader D, a <code>writable</code> across a swap, and the
-install watchdog.</li>
+<li><strong>A plugin is a directory with a <code>package.json</code> and one file per surface.</strong> Each facet is bundled alone; host
+packages are passed in, never copied; a whole plugin set builds in a few hundred milliseconds.</li>
+<li><strong>Chord should ship the app kit</strong> (proposed): loader, HTTP, workers, web, TUI and dev reload as optional
+components, so a mini p2 is a page of code.</li>
+<li><strong>Six points are open:</strong> the reload API, the rollout across hosts, a <code>writable</code> across a swap, the install
+watchdog, where the loader lives, and the app kit.</li>
 </ol>
 <h3 id="words-used-throughout">Words used throughout</h3>
 <p>A <strong>reload</strong> changes the code of one or more plugins on one host. A <strong>facet</strong> is a plugin&#39;s code for one host kind; a
@@ -162,7 +171,362 @@ in 7a&#39;s sense. A <strong>pure</strong> object has no natives (<code>self.ope
 of the same code set on every host, server first.</p>
 </section>
 
-<section class="chapter" id="host"><header class="opener"><div class="numeral">I</div><h2>One Host Reloads</h2><p class="lede">Four steps, all or nothing up to the commit.</p></header>
+<section class="chapter" id="plugin"><header class="opener"><div class="numeral">I</div><h2>A Plugin, File by File</h2><p class="lede">What a plugin looks like on disk, and what each file is for.</p></header>
+<p class="dropcap">A plugin is a directory. Its name is its <code>package.json</code> name; its code is one file per host kind it runs on, a
+<strong>facet</strong>; everything else is ordinary TypeScript the facets import. This is p2&#39;s layout today (<code>apps/p2/plugins/*</code>),
+plus the <code>package.json</code> that loader D needs (p2&#39;s <code>plugin-loading.md</code> §8; p2&#39;s built-in plugins have none yet and are
+named by their directory).</p>
+<pre class="plain"><code>plugins/notes/
+  package.json        name = the plugin's name; peerDependencies = host packages; dependencies = bundled npm deps
+  contract.ts         the plugin's object types and registries (shared by its facets and by other plugins)
+  server.ts           facet for the server     (default export: defineFacet(...))
+  worker.ts           facet for session workers
+  web.tsx             facet for browser tabs
+  tui.ts              facet for the TUI
+  store.ts            plain modules the facets import
+  NoteList.tsx
+  notes.css
+  assets/
+    template.md       files the plugin ships (read at runtime, or offered for download)
+    icon.svg
+  skills/notes/SKILL.md   optional resources (p2 §4.4)</code></pre>
+<pre><code>{
+  <span class="tk-s">"name"</span>: <span class="tk-s">"@pi/notes"</span>,
+  <span class="tk-s">"version"</span>: <span class="tk-s">"1.4.0"</span>,
+  <span class="tk-s">"type"</span>: <span class="tk-s">"module"</span>,
+  <span class="tk-s">"peerDependencies"</span>: {
+    <span class="tk-s">"@earendil-works/chord"</span>: <span class="tk-s">"^2"</span>,
+    <span class="tk-s">"@earendil-works/pi-durable"</span>: <span class="tk-s">"^1"</span>,
+    <span class="tk-s">"react"</span>: <span class="tk-s">"^19"</span>
+  },
+  <span class="tk-s">"dependencies"</span>: {
+    <span class="tk-s">"marked"</span>: <span class="tk-s">"16.4.1"</span>
+  }
+}</code></pre>
+<ul>
+<li><strong><code>name</code></strong> identifies the plugin everywhere: its facets, its registry contributions, diagnostics, reloads.</li>
+<li><strong><code>peerDependencies</code></strong> are <strong>host packages</strong>: the running app supplies them, one instance per process (one Chord,
+one React; <code>instanceof ChordError</code> and React hooks only work that way). The bundler never copies them.</li>
+<li><strong><code>dependencies</code></strong> are the plugin&#39;s own npm packages (<code>marked</code>): installed into the plugin&#39;s <code>node_modules</code> with
+<code>--ignore-scripts</code> and bundled into every facet that imports them.</li>
+<li><strong>No <code>tsconfig.json</code> is needed.</strong> The bundler strips types and does not type-check; JSX is compiled with the
+automatic React runtime, a fixed setting of the loader. A plugin may keep a <code>tsconfig.json</code> for its editor and for
+<code>tsc --noEmit</code> (the SDK ships one to extend); the loader ignores it.</li>
+</ul>
+<p>A facet only declares (chapter III of the model): it serves object types, serves or contributes to registries, and
+returns nothing.</p>
+<pre><code><span class="tk-c">// plugins/notes/contract.ts</span>
+<span class="tk-k">import</span> { defineRegistry, local, remote, str, obj, arr, method } <span class="tk-k">from</span> <span class="tk-s">"@earendil-works/chord/next"</span>;
+<span class="tk-k">import</span> { <span class="tk-t">Session</span> } <span class="tk-k">from</span> <span class="tk-s">"@app/core"</span>;                        <span class="tk-c">// the app's host kinds, a host package</span>
+<span class="tk-k">export</span> <span class="tk-k">const</span> <span class="tk-t">NoteStore</span> = <span class="tk-f">local</span>(<span class="tk-s">"notes.store"</span>, { version: <span class="tk-n">1</span>, params: {}, members: { <span class="tk-c">/* … */</span> } });
+<span class="tk-k">export</span> <span class="tk-k">const</span> <span class="tk-t">Notes</span> = <span class="tk-f">remote</span>(<span class="tk-s">"notes"</span>, {
+  version: <span class="tk-n">2</span>,
+  params: { session: <span class="tk-f">str</span>() },
+  hostAddress: ({ session }) =&gt; <span class="tk-t">Session</span>({ id: session }),
+  variants: { editor: { state: { list: <span class="tk-f">arr</span>(<span class="tk-f">obj</span>({ id: <span class="tk-f">str</span>(), text: <span class="tk-f">str</span>() })) }, methods: { add: <span class="tk-f">method</span>(<span class="tk-f">obj</span>({ text: <span class="tk-f">str</span>() })) } } },
+});
+
+<span class="tk-c">// plugins/notes/worker.ts</span>
+<span class="tk-k">import</span> { defineFacet } <span class="tk-k">from</span> <span class="tk-s">"@app/core"</span>;                    <span class="tk-c">// bound to the app's principal type</span>
+<span class="tk-k">import</span> { <span class="tk-t">NoteStore</span>, <span class="tk-t">Notes</span> } <span class="tk-k">from</span> <span class="tk-s">"./contract.ts"</span>;
+<span class="tk-k">import</span> { serveStore } <span class="tk-k">from</span> <span class="tk-s">"./store.ts"</span>;
+<span class="tk-k">export</span> <span class="tk-k">default</span> <span class="tk-f">defineFacet</span>((host) =&gt; {
+  host.<span class="tk-f">serve</span>(<span class="tk-t">NoteStore</span>, serveStore);
+  host.<span class="tk-f">serve</span>(<span class="tk-t">Notes</span>, ({ session }, principal, self) =&gt; { <span class="tk-c">/* … */</span> });
+});
+
+<span class="tk-c">// plugins/notes/web.tsx</span>
+<span class="tk-k">import</span> { defineFacet } <span class="tk-k">from</span> <span class="tk-s">"@app/core"</span>;
+<span class="tk-k">import</span> { <span class="tk-t">NoteList</span> } <span class="tk-k">from</span> <span class="tk-s">"./NoteList.tsx"</span>;                  <span class="tk-c">// a React component, bundled</span>
+<span class="tk-k">import</span> <span class="tk-s">"./notes.css"</span>;                                       <span class="tk-c">// bundled into the facet's stylesheet</span>
+<span class="tk-k">export</span> <span class="tk-k">default</span> <span class="tk-f">defineFacet</span>((host, self) =&gt; {
+  self.<span class="tk-f">contribute</span>(<span class="tk-t">Panels</span>, { notes: <span class="tk-t">NoteList</span> });             <span class="tk-c">// the app's UI registry</span>
+});</code></pre>
+</section>
+
+<section class="chapter" id="loading"><header class="opener"><div class="numeral">II</div><h2>Building and Loading</h2><p class="lede">How the bundler knows what to pull in, and how the code gets into a running process.</p></header>
+<p class="dropcap">Each facet is built on its own, as one script. The bundler starts at the facet file and follows its imports:</p>
+<table>
+<thead>
+<tr>
+<th>An import of</th>
+<th>Becomes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>the plugin&#39;s own files (<code>./store.ts</code>, <code>./NoteList.tsx</code>)</td>
+<td>inlined into the facet&#39;s script</td>
+</tr>
+<tr>
+<td>another plugin&#39;s contract (<code>../sessions/contract.ts</code>, or <code>@pi/sessions/contract</code> for an installed package)</td>
+<td>inlined too: a copy, so a plugin carries the contract version it was built against (<code>accepts</code> needs that); only contracts and side-effect-free modules may be imported across plugins</td>
+</tr>
+<tr>
+<td>an npm package in <code>dependencies</code> (<code>marked</code>)</td>
+<td>inlined, resolved from the plugin&#39;s own <code>node_modules</code></td>
+</tr>
+<tr>
+<td>a host package (<code>@earendil-works/chord/next</code>, <code>react</code>, <code>@app/core</code>, …)</td>
+<td><strong>external</strong>: a parameter of the script, the host&#39;s instance at load time</td>
+</tr>
+<tr>
+<td>a Node builtin (<code>node:fs</code>)</td>
+<td>external, through the <code>require</code> the loader passes (server and worker facets only; a web facet that imports one fails to build)</td>
+</tr>
+<tr>
+<td>CSS (<code>import &quot;./notes.css&quot;</code>)</td>
+<td>collected into one stylesheet per web facet</td>
+</tr>
+<tr>
+<td>an asset by URL (<code>import iconUrl from &quot;./assets/icon.svg?url&quot;</code>)</td>
+<td>a content-hashed file served by the app; the import is its URL</td>
+</tr>
+</tbody></table>
+<p>The built script is a function of its host packages. That is the whole trick of loader D: there is no module map, no
+second copy of Chord, and an old version is garbage-collected once nothing holds its closures.</p>
+<pre><code><span class="tk-c">// what the bundler emits for plugins/notes/worker.ts (simplified)</span>
+(<span class="tk-k">function</span> (require, __files) {
+  <span class="tk-k">const</span> { defineFacet } = <span class="tk-f">require</span>(<span class="tk-s">"@app/core"</span>);             <span class="tk-c">// the host's instance</span>
+  <span class="tk-k">const</span> { local, remote, str } = <span class="tk-f">require</span>(<span class="tk-s">"@earendil-works/chord/next"</span>);
+  <span class="tk-k">const</span> { marked } = <span class="tk-c">/* marked's code, inlined */</span>;
+  <span class="tk-c">/* contract.ts, store.ts, inlined */</span>
+  <span class="tk-k">return</span> <span class="tk-f">defineFacet</span>((host) =&gt; { <span class="tk-c">/* … */</span> });
+})</code></pre>
+<pre><code><span class="tk-c">// the loader (proposed @earendil-works/chord/next/loader), Node side</span>
+<span class="tk-k">import</span> { buildFacet, evaluateFacet } <span class="tk-k">from</span> <span class="tk-s">"@earendil-works/chord/next/loader"</span>;
+
+<span class="tk-k">const</span> HOST_PACKAGES = {                                     <span class="tk-c">// the app's base bundle exports these</span>
+  <span class="tk-s">"@earendil-works/chord/next"</span>: chordNext, <span class="tk-s">"@earendil-works/pi-durable"</span>: durable,
+  <span class="tk-s">"@app/core"</span>: core, react, <span class="tk-s">"react/jsx-runtime"</span>: jsxRuntime,
+};
+<span class="tk-k">const</span> script = <span class="tk-k">await</span> <span class="tk-f">buildFacet</span>({ plugin: <span class="tk-s">"/data/plugins/notes"</span>, facet: <span class="tk-s">"worker.ts"</span>, hostPackages: <span class="tk-t">Object</span>.<span class="tk-f">keys</span>(HOST_PACKAGES), platform: <span class="tk-s">"node"</span> });
+<span class="tk-k">const</span> facet = <span class="tk-f">evaluateFacet</span>(script, { hostPackages: HOST_PACKAGES, require: <span class="tk-f">createRequire</span>(<span class="tk-k">import</span>.meta.url), dir: <span class="tk-s">"/data/plugins/notes"</span> });
+<span class="tk-k">await</span> host.<span class="tk-f">reload</span>([{ name: <span class="tk-s">"@pi/notes"</span>, facet }], ctx);    <span class="tk-c">// or host.load the first time</span></code></pre>
+<ul>
+<li><code>buildFacet</code> is esbuild with: the facet as entry, the host packages and <code>node:*</code> external, <code>format: &quot;cjs&quot;</code> wrapped
+as the function above, minified, an <code>onResolve</code> that refuses anything outside the plugin, its <code>node_modules</code>, a
+contract of another plugin or a host package. It returns the script, its content hash and esbuild&#39;s metafile (the
+dev loop knows which files a facet used).</li>
+<li><code>evaluateFacet</code> runs the script with <code>vm.Script</code> and a stable filename per (facet, hash) on Node, or as a classic
+<code>&lt;script&gt;</code> in the browser (the page fetches the script and its stylesheet by hash, which caches forever).</li>
+<li><strong>Imports a plugin cannot use:</strong> dynamic <code>import()</code> (resolved at build, or not at all), top-level <code>await</code> (a facet is a
+synchronous declaration), <code>require</code> of anything but builtins.</li>
+</ul>
+<div class="note review"><b class="tag">Open 5: where the loader lives</b><p>(a) Chord ships <code>chord/next/loader</code> (discovery, <code>buildFacet</code>, <code>evaluateFacet</code>, <code>pluginFile</code>), an app chooses its host
+packages; (b) Chord knows only <code>host.reload(facets)</code> and the app bundles and evaluates. Recommended: (a); the kernel
+stays free of it, and Durable Objects (no <code>eval</code>) compose statically as before.</p>
+</div>
+</section>
+
+<section class="chapter" id="assets"><header class="opener"><div class="numeral">III</div><h2>Assets and Files</h2><p class="lede">Files a plugin ships: bundled into the browser, read at runtime, or offered for download.</p></header>
+<p class="dropcap">A plugin has files that are not code. They fall into three cases.</p>
+<p><strong>1. Imported by a web facet.</strong> CSS, images, wasm. The bundler emits them as content-hashed files next to the facet&#39;s
+script, and the import evaluates to their URL. The app serves the bundle&#39;s files under one path; p2 does exactly this
+today for the terminal&#39;s wasm (<code>plugins/terminals/Terminal.tsx</code>: <code>import ghosttyWasm from &quot;../../vendor/ghostty/ghostty-vt.wasm?url&quot;</code>, served under <code>/__p2_web/</code>).</p>
+<pre><code><span class="tk-k">import</span> iconUrl <span class="tk-k">from</span> <span class="tk-s">"./assets/icon.svg?url"</span>;
+<span class="tk-k">export</span> <span class="tk-k">const</span> <span class="tk-t">NoteIcon</span> = () =&gt; &lt;img src={iconUrl} alt=<span class="tk-s">""</span> /&gt;;</code></pre>
+<p><strong>2. Read at runtime by a server or worker facet.</strong> A template, a wasm module for a native, a script a native runs. A
+bundled script has no meaningful <code>import.meta.url</code> (today&#39;s <code>plugins/terminals/main.ts</code> reads its wasm with
+<code>new URL(&quot;../../vendor/…&quot;, import.meta.url)</code>). The loader passes the plugin&#39;s directory, and a helper resolves a path
+inside it, refusing <code>..</code> out of it:</p>
+<pre><code><span class="tk-c">// plugins/notes/worker.ts</span>
+<span class="tk-k">import</span> { pluginFile } <span class="tk-k">from</span> <span class="tk-s">"@earendil-works/chord/next/loader"</span>;   <span class="tk-c">// reads the directory the loader passed</span>
+<span class="tk-k">const</span> template = <span class="tk-k">await</span> <span class="tk-f">readFile</span>(<span class="tk-f">pluginFile</span>(<span class="tk-s">"assets/template.md"</span>), <span class="tk-s">"utf8"</span>);</code></pre>
+<p><strong>3. Offered for download over HTTP.</strong> A plugin contributes a route to the app&#39;s HTTP registry; the handler opens the
+file through the same helper and streams it, with the plugin&#39;s own authorization:</p>
+<pre><code><span class="tk-c">// plugins/notes/server.ts</span>
+<span class="tk-k">export</span> <span class="tk-k">default</span> <span class="tk-f">defineFacet</span>((host, self) =&gt; {
+  self.<span class="tk-f">contribute</span>(<span class="tk-t">Http</span>, {
+    routes: {
+      <span class="tk-s">"GET /notes/template.md"</span>: <span class="tk-k">async</span> (request, ctx) =&gt; {
+        <span class="tk-k">if</span> (ctx.principal.kind !== <span class="tk-s">"owner"</span>) <span class="tk-k">return</span> { kind: <span class="tk-s">"error"</span>, status: <span class="tk-n">403</span> };
+        <span class="tk-k">const</span> path = <span class="tk-f">pluginFile</span>(<span class="tk-s">"assets/template.md"</span>);
+        <span class="tk-k">const</span> { size } = <span class="tk-k">await</span> <span class="tk-f">stat</span>(path);
+        <span class="tk-k">return</span> { kind: <span class="tk-s">"bytes"</span>, name: <span class="tk-s">"template.md"</span>, mime: <span class="tk-s">"text/markdown"</span>, size, read: (offset, length) =&gt; <span class="tk-f">readRange</span>(path, offset, length) };
+      },
+    },
+  });
+});</code></pre>
+<p>So yes: a plugin can offer its files for download, because the loader tells it where it lives. Each facet sees only its
+own plugin&#39;s directory; nothing gives it another plugin&#39;s files.</p>
+</section>
+
+<section class="chapter" id="http"><header class="opener"><div class="numeral">IV</div><h2>HTTP</h2><p class="lede">What Chord provides, what p2 has, and what p3 needs.</p></header>
+<p class="dropcap"><strong>Chord v2 has no HTTP server today.</strong> Design §23 designs one (<code>@earendil-works/chord/next/http</code>) and defers it until
+&quot;the kernel fixes and a first real proof&quot; are done. p2&#39;s HTTP is its own, about 30 lines of helpers plus the server host:</p>
+<pre><code><span class="tk-c">// apps/p2/src/runtime/server.ts (p2 today, Chord v1)</span>
+<span class="tk-k">export</span> <span class="tk-k">const</span> <span class="tk-t">Routes</span> = <span class="tk-f">defineRegistry</span>&lt;<span class="tk-t">RouteHandler</span>&gt;(<span class="tk-s">"p2.routes"</span>, { conflict: <span class="tk-s">"error"</span> });        <span class="tk-c">// "METHOD /path" → handler</span>
+<span class="tk-k">export</span> <span class="tk-k">const</span> <span class="tk-t">Upgrades</span> = <span class="tk-f">defineRegistry</span>&lt;<span class="tk-t">UpgradeHandler</span>&gt;(<span class="tk-s">"p2.upgrades"</span>, { conflict: <span class="tk-s">"error"</span> });   <span class="tk-c">// WebSocket upgrades</span>
+<span class="tk-k">export</span> <span class="tk-k">const</span> <span class="tk-t">RequestResolvers</span> = <span class="tk-f">defineRegistry</span>&lt;<span class="tk-t">RequestResolver</span>&gt;(<span class="tk-s">"p2.request-resolvers"</span>, { conflict: <span class="tk-s">"error"</span> });
+<span class="tk-k">type</span> <span class="tk-t">RouteHandler</span> = (request: <span class="tk-t">IncomingMessage</span>, response: <span class="tk-t">ServerResponse</span>, access: <span class="tk-t">RequestAccess</span>, ctx: <span class="tk-t">Ctx</span>) =&gt; <span class="tk-k">void</span> | <span class="tk-t">Promise</span>&lt;<span class="tk-k">void</span>&gt;;</code></pre>
+<p>Plugins contribute handlers that write to Node&#39;s <code>ServerResponse</code> themselves; the files plugin implements ranges,
+download headers and previews by hand (<code>plugins/files/server.ts</code>).</p>
+<p>The designed component (§23) replaces raw responses with descriptions, so every plugin gets ranges (206/416), <code>HEAD</code>,
+safe download headers, streaming and abort on disconnect from one place:</p>
+<pre><code><span class="tk-k">export</span> <span class="tk-k">const</span> <span class="tk-t">Http</span> = <span class="tk-f">defineRegistry</span>&lt;<span class="tk-t">HttpContribution</span>, <span class="tk-t">Router</span>&gt;(<span class="tk-s">"chord.http"</span>, { version: <span class="tk-n">1</span> });
+<span class="tk-k">type</span> <span class="tk-t">HttpContribution</span> = { routes?: <span class="tk-t">Record</span>&lt;string, <span class="tk-t">Route</span>&gt;; wraps?: <span class="tk-t">Wrap</span>[] };
+<span class="tk-k">type</span> <span class="tk-t">Route</span> = (req: <span class="tk-t">HttpRequest</span>, ctx: <span class="tk-t">Ctx</span>) =&gt; <span class="tk-t">Promise</span>&lt;<span class="tk-t">HttpResponse</span>&gt;;   <span class="tk-c">// ctx.principal: the request's principal</span>
+<span class="tk-k">type</span> <span class="tk-t">HttpResponse</span> =
+  | { kind: <span class="tk-s">"json"</span>; value: <span class="tk-t">JsonValue</span> } | { kind: <span class="tk-s">"page"</span>; title: string; body: string }
+  | { kind: <span class="tk-s">"bytes"</span>; name: string; mime: string; size: number; <span class="tk-f">read</span>(offset: number, length: number): <span class="tk-t">Promise</span>&lt;<span class="tk-t">Uint8Array</span>&gt; }
+  | { kind: <span class="tk-s">"redirect"</span>; to: string } | { kind: <span class="tk-s">"error"</span>; status: number };</code></pre>
+<ul>
+<li>Routes compose by <code>keyedEntries</code>: a duplicate pattern is a reported conflict, the first by plugin name wins.</li>
+<li>Wraps (middleware) run in phases the owner defines (<code>observe</code>, <code>headers</code>, <code>transform</code>), by default only around their
+own plugin&#39;s routes.</li>
+<li>Request resolvers (who sent a request: cookie, loopback, relay) are hooks; WebSocket byte channels for terminals are
+a separate component.</li>
+</ul>
+</section>
+
+<section class="chapter" id="perf"><header class="opener"><div class="numeral">V</div><h2>Performance</h2><p class="lede">Measured on slayer, Node 24, esbuild from the repo, p2&#39;s plugins as they are.</p></header>
+<p class="dropcap">Built with the loader D settings above (each facet alone, host packages and <code>apps/p2/src</code> external, minified), on
+p2&#39;s real plugins:</p>
+<table>
+<thead>
+<tr>
+<th>Measurement</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>all 25 worker facets, one script each, cold</td>
+<td>237 ms, 294 KB in total, largest <code>models/worker.ts</code> 35 KB</td>
+</tr>
+<tr>
+<td>all 20 server facets, cold</td>
+<td>167 ms, 236 KB</td>
+</tr>
+<tr>
+<td>all 17 web facets, cold</td>
+<td>144 ms, 912 KB, of which 688 KB is the terminal&#39;s wasm</td>
+</tr>
+<tr>
+<td>one facet rebuilt after an edit (esbuild context, warm)</td>
+<td>11 ms</td>
+</tr>
+<tr>
+<td>compile and evaluate all 25 worker scripts (<code>vm.Script</code>)</td>
+<td>23 ms</td>
+</tr>
+<tr>
+<td>worker spawn to ready, p2 today (TypeScript through the source resolver, <code>nodeLoader</code>)</td>
+<td>549 ms (p2&#39;s measurement, <code>plugin-loading.md</code> §14.1)</td>
+</tr>
+<tr>
+<td>the same with one bundle per worker plugin set</td>
+<td>218 ms</td>
+</tr>
+<tr>
+<td>base bundle plus one script per plugin through ESM (model B)</td>
+<td>254 ms; D is expected near it</td>
+</tr>
+</tbody></table>
+<p>The plugins are small; the time goes into the host packages and the runtime (85% of a worker&#39;s load time, p2 §14.1),
+which the base bundle loads once per process. A reload of one plugin costs one rebuild (about 11 ms warm) and one
+evaluation (about 1 ms per facet), then Chord&#39;s reload. The memory caveat is V8&#39;s compilation cache: every distinct
+compiled script stays cached, so scripts get a stable name per (facet, hash) and hosts that reload in place run with
+the cache off (+0.1 MiB instead of +5.6 MiB per 100 reloads, p2&#39;s measurement).</p>
+</section>
+
+<section class="chapter" id="kit"><header class="opener"><div class="numeral">VI</div><h2>A Mini p2 from Chord</h2><p class="lede">The owner: building a small p2 with a web and a TUI surface and plugins should be trivial from Chord; optional components should come out of the box.</p></header>
+<p class="dropcap">p2 has about 10,700 lines of host code in <code>apps/p2/src/hosts</code> and its runtime: the server&#39;s HTTP and WebSocket
+entry, the worker supervisor, plugin discovery, the web and TUI bundles, the web shell, the TUI sandbox and launcher,
+the reload control. Almost none of it is p2-specific. The proposal: Chord ships it as optional components, each a
+subpath an app imports only if it wants it, none of them in Chord&#39;s kernel.</p>
+<h3 id="what-it-would-look-like">What it would look like</h3>
+<pre><code><span class="tk-c">// server.ts: a whole app with plugins, a web and a TUI surface</span>
+<span class="tk-k">import</span> { createHost } <span class="tk-k">from</span> <span class="tk-s">"@earendil-works/chord/next"</span>;
+<span class="tk-k">import</span> { discoverPlugins, pluginLoader } <span class="tk-k">from</span> <span class="tk-s">"@earendil-works/chord/next/loader"</span>;
+<span class="tk-k">import</span> { httpServer } <span class="tk-k">from</span> <span class="tk-s">"@earendil-works/chord/next/http"</span>;
+<span class="tk-k">import</span> { workerRoute } <span class="tk-k">from</span> <span class="tk-s">"@earendil-works/chord/next/workers"</span>;
+<span class="tk-k">import</span> { webSurface } <span class="tk-k">from</span> <span class="tk-s">"@earendil-works/chord/next/web"</span>;
+<span class="tk-k">import</span> { tuiSurface } <span class="tk-k">from</span> <span class="tk-s">"@earendil-works/chord/next/tui"</span>;
+<span class="tk-k">import</span> { devReload } <span class="tk-k">from</span> <span class="tk-s">"@earendil-works/chord/next/dev"</span>;
+<span class="tk-k">import</span> { <span class="tk-t">Server</span>, <span class="tk-t">Session</span>, core } <span class="tk-k">from</span> <span class="tk-s">"./core.ts"</span>;              <span class="tk-c">// the app's base code: host kinds, principals, core facet</span>
+
+<span class="tk-k">const</span> plugins = <span class="tk-k">await</span> <span class="tk-f">discoverPlugins</span>([<span class="tk-s">"./plugins"</span>, <span class="tk-f">join</span>(dataDir, <span class="tk-s">"plugins"</span>)]);
+<span class="tk-k">const</span> loader = <span class="tk-f">pluginLoader</span>({ hostPackages: core.hostPackages });
+
+<span class="tk-k">const</span> server = <span class="tk-f">createHost</span>&lt;P&gt;({ address: <span class="tk-t">Server</span>(), principal: { kind: <span class="tk-s">"server"</span> }, onError });
+server.<span class="tk-f">route</span>(<span class="tk-t">Session</span>, <span class="tk-f">workerRoute</span>({ entry: <span class="tk-s">"./worker.ts"</span>, idleMs: <span class="tk-n">300_000</span>, authorize: core.authorize }), ctx);
+<span class="tk-k">await</span> server.<span class="tk-f">load</span>([core.serverFacet, ...(<span class="tk-k">await</span> loader.<span class="tk-f">facets</span>(plugins, <span class="tk-s">"server"</span>))], ctx);
+
+<span class="tk-k">const</span> http = <span class="tk-f">httpServer</span>(server, { port: <span class="tk-n">4321</span>, authenticate: core.authenticate });   <span class="tk-c">// routes from the Http registry</span>
+http.<span class="tk-f">surface</span>(<span class="tk-f">webSurface</span>({ loader, plugins, shell: core.webShell }));                  <span class="tk-c">// /: the page, its bundle, its socket</span>
+http.<span class="tk-f">surface</span>(<span class="tk-f">tuiSurface</span>({ loader, plugins }));                                        <span class="tk-c">// the TUI launcher's bundle and socket</span>
+<span class="tk-f">devReload</span>({ server, loader, plugins, watch: <span class="tk-k">true</span> });                                 <span class="tk-c">// a changed plugin reloads everywhere</span></code></pre>
+<pre><code><span class="tk-c">// worker.ts</span>
+<span class="tk-k">import</span> { workerMain } <span class="tk-k">from</span> <span class="tk-s">"@earendil-works/chord/next/workers"</span>;
+<span class="tk-k">await</span> <span class="tk-f">workerMain</span>(<span class="tk-k">async</span> ({ address, init, parent }) =&gt; {
+  <span class="tk-k">const</span> worker = <span class="tk-f">createHost</span>&lt;P&gt;({ address, principal: { kind: <span class="tk-s">"worker"</span>, session: init.id }, onError });
+  worker.<span class="tk-f">connect</span>(parent, { principal: { kind: <span class="tk-s">"server"</span> }, trusted: <span class="tk-k">true</span> }, ctx);
+  <span class="tk-k">await</span> worker.<span class="tk-f">load</span>([core.<span class="tk-f">workerFacet</span>(init), ...(<span class="tk-k">await</span> loader.<span class="tk-f">facets</span>(init.plugins, <span class="tk-s">"worker"</span>))], ctx);
+  <span class="tk-k">return</span> worker;
+});</code></pre>
+<pre><code><span class="tk-c">// core.ts, the web shell: the app decides the layout; plugins fill registries</span>
+<span class="tk-k">export</span> <span class="tk-k">const</span> <span class="tk-t">Panels</span> = defineRegistry&lt;<span class="tk-t">Record</span>&lt;string, <span class="tk-t">ComponentType</span>&gt;, <span class="tk-t">Panel</span>[]&gt;(<span class="tk-s">"app.panels"</span>, { version: <span class="tk-n">1</span> });
+<span class="tk-k">export</span> <span class="tk-k">const</span> webShell = ({ host }: <span class="tk-t">ShellProps</span>) =&gt; {
+  <span class="tk-k">const</span> panels = <span class="tk-f">useRegistry</span>(host, <span class="tk-t">Panels</span>);                     <span class="tk-c">// from chord/next/web: a hook over a registry value</span>
+  <span class="tk-k">return</span> &lt;<span class="tk-t">Tabs</span>&gt;{panels.<span class="tk-f">map</span>((p) =&gt; &lt;p.component key={p.name} /&gt;)}&lt;/<span class="tk-t">Tabs</span>&gt;;
+};</code></pre>
+<p>And a plugin is what chapter I shows: a directory, a <code>package.json</code>, facets that serve types and contribute to the
+app&#39;s registries (<code>Http</code>, <code>Panels</code>, a TUI command list).</p>
+<h3 id="the-components">The components</h3>
+<table>
+<thead>
+<tr>
+<th>Subpath</th>
+<th>What it does</th>
+<th>Replaces in p2</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>chord/next/loader</code></td>
+<td><code>discoverPlugins</code> (directory listing, <code>package.json</code> names, no parsing), <code>buildFacet</code> (esbuild, host packages external), <code>evaluateFacet</code> (Node <code>vm</code>, browser <code>&lt;script&gt;</code>), <code>pluginFile</code>, npm/git install with <code>--ignore-scripts</code></td>
+<td><code>src/hosts/plugins.ts</code>, <code>bundles.ts</code>, the source resolver, <code>nodeLoader</code></td>
+</tr>
+<tr>
+<td><code>chord/next/http</code></td>
+<td>the Node HTTP server, the <code>Http</code> registry (routes, wraps, request resolvers, responses as descriptions: ranges, downloads, <code>HEAD</code>), WebSocket entry calling <code>host.accept</code></td>
+<td><code>src/hosts/server.ts</code> (HTTP part), <code>runtime/http.ts</code>, <code>Routes</code>, <code>Upgrades</code>, <code>RequestResolvers</code></td>
+</tr>
+<tr>
+<td><code>chord/next/workers</code></td>
+<td><code>workerRoute</code> (fork a worker per address, IPC link, start message, idle stop from <code>host.activity</code>, crash restart with backoff), <code>workerMain</code> (the child&#39;s side)</td>
+<td><code>SessionHosts</code> in <code>runtime/server.ts</code>, <code>hosts/worker.ts</code></td>
+</tr>
+<tr>
+<td><code>chord/next/web</code></td>
+<td>the page host (connect over a WebSocket with reconnect, load web facets from their scripts, React provider and hooks: <code>useObject</code> over <code>host.hold</code>, <code>useRegistry</code>, <code>useWatch</code>), serving the bundle by hash, reload on a new manifest</td>
+<td><code>hosts/web/*</code>, <code>runtime/web.tsx</code>, <code>src/web/reconnect.ts</code></td>
+</tr>
+<tr>
+<td><code>chord/next/tui</code></td>
+<td>the TUI launcher and sandbox (pi-tui, the bundle download, a link over the launcher&#39;s socket), slots and commands as registries</td>
+<td><code>hosts/tui-*.ts</code>, <code>runtime/tui.ts</code></td>
+</tr>
+<tr>
+<td><code>chord/next/dev</code></td>
+<td>the source watcher marking plugins dirty, the reload control (<code>reload(plugins)</code> on every host in order: server, workers, then a manifest bump for pages and the TUI)</td>
+<td><code>performReload</code> in <code>hosts/server.ts</code>, the dev protocol</td>
+</tr>
+</tbody></table>
+<p>Each is ordinary code on top of Chord&#39;s public API: nothing in the kernel depends on it, a Durable Object deployment
+uses none of it, and an app can replace any one (its own HTTP server, its own shell). React is a host package of the web
+component, pi-tui of the TUI component; an app without them never imports them.</p>
+<h3 id="what-stays-the-app-39-s">What stays the app&#39;s</h3>
+<p>The principal type and authentication; the host kinds (<code>Server</code>, <code>Session</code>) and what a worker&#39;s start message holds;
+the core facet and core objects (catalog, harness); the web shell&#39;s layout and the TUI&#39;s look; which registries plugins
+contribute to beyond <code>Http</code>. That is roughly what p3&#39;s base code should be: a few hundred lines, not ten thousand.</p>
+<div class="note review"><b class="tag">Open 6: the app kit</b><p>(a) Chord ships these six components as optional subpaths of <code>@earendil-works/chord</code>, built in this order: <code>loader</code>
+and <code>dev</code> with 7b (reload needs them), <code>http</code> and <code>workers</code> next (p3 needs them first), <code>web</code> and <code>tui</code> after (lifted
+from p2&#39;s code, which works today). (b) Chord ships only <code>loader</code>; the rest is p3&#39;s base code. Recommended: (a), as the
+owner asked; each component gets its own slice spec and review, after 7b and before slice 9 or alongside p3&#39;s base.</p>
+</div>
+</section>
+
+<section class="chapter" id="host"><header class="opener"><div class="numeral">VII</div><h2>One Host Reloads</h2><p class="lede">Four steps, all or nothing up to the commit.</p></header>
 <p class="dropcap">Design §21 fixes the shape. <strong>Decided.</strong></p>
 <pre class="plain"><code>1. load      the new bundles; an import or syntax error rejects
 2. staging   facet setups and every live object's new factory run with a recording `self`
@@ -184,7 +548,7 @@ barrier) and its rollback rule does not apply to the first load (a throwing firs
 </div>
 </section>
 
-<section class="chapter" id="fates"><header class="opener"><div class="numeral">II</div><h2>Three Fates</h2><p class="lede">What happens to each live object at the commit.</p></header>
+<section class="chapter" id="fates"><header class="opener"><div class="numeral">VIII</div><h2>Three Fates</h2><p class="lede">What happens to each live object at the commit.</p></header>
 <p class="dropcap">The commit compares each live object&#39;s old and new declarations. <strong>Decided</strong> (design §21, owner 2026-10-26, the
 dependency model).</p>
 <table>
@@ -253,7 +617,7 @@ Recommended: (a); writables have no names, and position matching would be the fi
 </div>
 </section>
 
-<section class="chapter" id="consumers"><header class="opener"><div class="numeral">III</div><h2>Consumers Across a Reload</h2><p class="lede">Holds, versions and old calls; 7a decided that nothing is ended for a code change.</p></header>
+<section class="chapter" id="consumers"><header class="opener"><div class="numeral">IX</div><h2>Consumers Across a Reload</h2><p class="lede">Holds, versions and old calls; 7a decided that nothing is ended for a code change.</p></header>
 <p class="dropcap">A reference on another host points at an object whose code may change under it. <strong>Decided</strong> (design §21, §22 and the
 dependency model):</p>
 <table>
@@ -312,7 +676,7 @@ old.</li>
 the provider&#39;s table. Small and <strong>decided</strong> in shape (Q10, <code>bindProvider</code>); the option&#39;s place is <code>host.serve(Type, factory, { accepts, linger })</code>.</p>
 </section>
 
-<section class="chapter" id="jobs"><header class="opener"><div class="numeral">IV</div><h2>Jobs Across a Reload</h2><p class="lede">Runs belong to the object; their versions are mapped forward.</p></header>
+<section class="chapter" id="jobs"><header class="opener"><div class="numeral">X</div><h2>Jobs Across a Reload</h2><p class="lede">Runs belong to the object; their versions are mapped forward.</p></header>
 <p class="dropcap"><strong>Decided</strong> (design §15, owner 2026-10-24 and 2026-10-26):</p>
 <pre><code><span class="tk-k">const</span> <span class="tk-t">ExportJob</span> = <span class="tk-f">defineJob</span>(<span class="tk-s">"notes.export"</span>, {
   version: <span class="tk-n">2</span>,
@@ -333,7 +697,7 @@ that brings their version.</li>
 </ul>
 </section>
 
-<section class="chapter" id="registries"><header class="opener"><div class="numeral">V</div><h2>Registries Across a Reload</h2><p class="lede">A provider and its contributions are swapped in one batch.</p></header>
+<section class="chapter" id="registries"><header class="opener"><div class="numeral">XI</div><h2>Registries Across a Reload</h2><p class="lede">A provider and its contributions are swapped in one batch.</p></header>
 <p class="dropcap"><strong>Decided</strong> (slice 8 §6, design §17): the commit replaces a plugin&#39;s contributions and a registry&#39;s provider in one
 batch; staging composes nothing (D1). The record keeps the provider, facet contributions by plugin and object
 contributions by object apart, so a reload of one plugin replaces exactly its parts (today <code>RegistryRecord.serve</code>
@@ -341,7 +705,7 @@ refuses a second serve). Older readers across a reload of the provider follow it
 waits (7a) when the new provider no longer serves its version. <code>retryOn</code> watches are re-declared by the new factory.</p>
 </section>
 
-<section class="chapter" id="rollout"><header class="opener"><div class="numeral">VI</div><h2>Across Hosts</h2><p class="lede">The same reload on every host, in an order that cannot deadlock.</p></header>
+<section class="chapter" id="rollout"><header class="opener"><div class="numeral">XII</div><h2>Across Hosts</h2><p class="lede">The same reload on every host, in an order that cannot deadlock.</p></header>
 <p class="dropcap"><strong>Decided</strong> (design §21 and the dependency model): a revision is the complete code set; the server installs first,
 then workers, then clients; installs are serialized per host; a host that starts or reconnects installs the current
 revision first; a revision carries a code-set digest so an unchanged server restart reinstalls nothing; an install
@@ -368,41 +732,6 @@ context like everything else, and the app passes its deadline; a host option wou
 </div>
 </section>
 
-<section class="chapter" id="loader"><header class="opener"><div class="numeral">VII</div><h2>Loader D</h2><p class="lede">How a plugin&#39;s new code gets into a running process.</p></header>
-<p class="dropcap">p2 designed it (<code>apps/p2/docs/plugin-loading.md</code> §9, §14); Chord has not built it. <strong>Decided in p2&#39;s design:</strong></p>
-<ul>
-<li><p><strong>One base bundle per surface</strong> holds every host package once: Chord, Durable, pi-ai, pi-tui, TypeBox, React and
-<code>react-dom</code>, plus the app&#39;s runtime. A change to it restarts the hosts.</p>
-</li>
-<li><p><strong>One script per facet</strong>, an esbuild bundle wrapped as a function of its host packages, which are external and
-passed in, so there is one Chord and one React per process:</p>
-<pre><code><span class="tk-c">// notes/worker.facet.js, built</span>
-(require, chord, durable, react) =&gt; {
-  <span class="tk-k">const</span> { defineFacet, local, str } = chord;   <span class="tk-c">// the host's instance, not a copy</span>
-  <span class="tk-c">/* the plugin's own files, contracts included (bundled: their versions are the plugin's) */</span>
-  <span class="tk-k">return</span> <span class="tk-f">defineFacet</span>((host, self) =&gt; { … });
-}</code></pre>
-</li>
-<li><p><strong>Evaluation:</strong> <code>vm.Script.runInThisContext</code> on Node (server, workers, TUI worker), a classic <code>&lt;script&gt;</code> plus one CSS
-file in the browser. No module map: an old generation is closures the GC reclaims once nothing holds them.</p>
-</li>
-<li><p><strong>Stable script names</strong> per (facet, content digest), with V8&#39;s compilation cache off on hosts that reload in place
-(measured: every distinct compile otherwise stays in memory, +5.6 MiB per 100 compiles of 72 KB).</p>
-</li>
-<li><p><strong>Contracts are never host packages:</strong> each facet bundles its own contract version, or <code>accepts</code> would never apply.</p>
-</li>
-<li><p><strong>Blockers</strong> to solve: <code>instanceof</code> across plugins, plugin files shared between plugins (copied with their module
-state), <code>import.meta.url</code>, Node builtins through the passed <code>require</code>, CSS and wasm assets.</p>
-</li>
-</ul>
-<div class="note review"><b class="tag">Open 5: where loader D lives</b><p>(a) Chord ships the facet-script format, its evaluation (Node <code>vm</code>, browser <code>&lt;script&gt;</code>) and an esbuild helper that
-marks host packages external; an app chooses its host packages. (b) Chord knows only <code>host.reload(facets)</code>;
-bundling and evaluation are entirely the app&#39;s (p3&#39;s base code). Recommended: (a): every Chord app gets live reload,
-and the blockers are solved once; Chord&#39;s kernel stays free of it (a separate subpath, <code>@earendil-works/chord/next/loader</code>),
-so Durable Objects, which forbid <code>eval</code>, compose statically as before.</p>
-</div>
-</section>
-
 <section class="chapter epilogue" id="decisions"><header class="opener"><div class="numeral">∴</div><h2>Decisions</h2><p class="lede">What is settled for the spec, and what the owner decides first.</p></header>
 <p class="dropcap"><strong>Decided</strong> (spec material): the four steps and rollback per host; the three fates and the parking of a swap with a
 missing dependency; old calls on old handles (R15); derives matched by member name; the routine handover; new instance
@@ -410,7 +739,8 @@ ids on restart; broken objects retried on reload; the handover of a parked attem
 re-subscribed or freshly bound; unbound <code>version</code> and <code>not_served</code> instead of <code>gone</code>; old-version calls and adapted
 bindings as diffs; <code>accepts</code> in <code>host.serve</code>; jobs&#39; version mapping, <code>blocked { version }</code> and retries on reload, runs
 aborted on a native restart; registries swapped in one batch; rollout order, serialized installs, the digest,
-<code>installing</code>, installs never waiting for activations; loader D&#39;s design.</p>
+<code>installing</code>, installs never waiting for activations; loader D&#39;s design: one script per facet, host packages passed in,
+contracts bundled, no module map, stable script names, plugins&#39; npm dependencies installed with <code>--ignore-scripts</code>.</p>
 <p><strong>Open</strong> for the owner:</p>
 <table>
 <thead>
@@ -444,6 +774,11 @@ aborted on a native restart; registries swapped in one batch; rollout order, ser
 <td>5</td>
 <td>where loader D lives: Chord (<code>chord/next/loader</code>), or the app</td>
 <td>Chord</td>
+</tr>
+<tr>
+<td>6</td>
+<td>the app kit: Chord ships loader, HTTP, workers, web, TUI and dev reload as optional subpaths, or only the loader</td>
+<td>Chord ships them, in that order</td>
 </tr>
 </tbody></table>
 </section>
