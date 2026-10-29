@@ -1,5 +1,12 @@
 // Core TUI interfaces and classes
 
+import { applyRtlSettingsFromDisk } from "./bidi.ts";
+
+// The `pi` bin of the shipped package is a bundle that inlines the settings
+// manager, so nothing calls configureBidi there. Configure RTL from the files
+// the settings manager reads when this entry point is loaded.
+applyRtlSettingsFromDisk();
+
 export { Marked, type Token, type Tokens } from "marked";
 // Autocomplete support
 export {
@@ -9,6 +16,20 @@ export {
 	CombinedAutocompleteProvider,
 	type SlashCommand,
 } from "./autocomplete.ts";
+// Components
+export {
+	alignRight,
+	type BaseDirection,
+	type BidiSettings,
+	configureBidi,
+	detectBaseDirection,
+	dominantDirection,
+	getBidiSettings,
+	hasStrongRtl,
+	reorderLine,
+	reorderLineWithCaret,
+	stepCaretVisual,
+} from "./bidi.ts";
 // Colors and styling
 export {
 	backgroundAnsi,
@@ -36,7 +57,6 @@ export {
 	type TextAttributes,
 	type TextStyle,
 } from "./colors.ts";
-// Components
 export { Box } from "./components/box.ts";
 export { CancellableLoader } from "./components/cancellable-loader.ts";
 export { Editor, type EditorOptions, type EditorTheme } from "./components/editor.ts";

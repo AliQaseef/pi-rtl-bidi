@@ -1,11 +1,40 @@
 import { Marked, type Token, Tokenizer, type TokenizerExtension, type Tokens } from "marked";
 import markedCjkFriendly from "marked-cjk-friendly";
+import { alignRight, dominantDirection, getBidiSettings, hasStrongRtl, reorderLine } from "../bidi.ts";
 import { renderLatex } from "../latex.ts";
 import { getCapabilities, hyperlink, isImageLine } from "../terminal-image.ts";
 import type { Component } from "../tui.ts";
-import { applyBackgroundToLine, cjkPunctuationRegex, flattenLines, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
+import {
+	applyBackgroundToLine,
+	cjkPunctuationRegex,
+	flattenLines,
+	getGraphemeSegmenter,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "../utils.ts";
 
 const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/;
+
+/**
+ * Paint one line in visual order and, when alignment is on, against the edge its
+ * dominant script reads from. The width is the column the line lives in, so the
+ * padding that fills it stays part of the line - a background wrapped around the
+ * line still covers the whole row.
+ */
+function paintVisual(text: string, width: number): string {
+	const visual = reorderLine(text);
+	return getBidiSettings().align && dominantDirection(text) === "rtl" ? alignRight(visual, width) : visual;
+}
+
+/**
+ * Paint a list marker the way an RTL reader sees it: the gap on the inner side,
+ * the dash or the number against the reading edge. "1." becomes " .1", so the
+ * digit is the last cell of the line and the dot sits to its left.
+ */
+function mirrorMarker(marker: string): string {
+	const graphemes = [...getGraphemeSegmenter().segment(marker.trimEnd())].map((segment) => segment.segment);
+	return ` ${graphemes.reverse().join("")}`;
+}
 
 class MarkdownTokenizer extends Tokenizer {
 	override url(src: string): Tokens.Link | undefined {
@@ -343,25 +372,39 @@ export class Markdown implements Component {
 		}
 
 		// Convert tokens to styled terminal output
-		const renderedLines: string[] = [];
+		// Code, tables, blockquote borders and list markers are chrome: their content is
+		// reordered where the content is produced, so the border or marker never moves.
+		const renderedLines: Array<{ line: string; reorderable: boolean }> = [];
 
 		for (let i = 0; i < tokens.length; i++) {
 			const token = tokens[i];
 			const nextToken = tokens[i + 1];
+			const reorderable =
+				token.type !== "code" && token.type !== "table" && token.type !== "blockquote" && token.type !== "list";
 			const tokenLines = this.renderToken(token, contentWidth, nextToken?.type);
 			for (const tokenLine of tokenLines) {
-				renderedLines.push(tokenLine);
+				renderedLines.push({ line: tokenLine, reorderable });
 			}
 		}
 
-		// Wrap lines (NO padding, NO background yet)
+		// Wrap lines (NO padding, NO background yet). Wrapping runs on logical text; each
+		// visual line is then reordered separately.
 		const wrappedLines: string[] = [];
-		for (const line of renderedLines) {
-			if (isImageLine(line)) {
-				wrappedLines.push(line);
+		for (const entry of renderedLines) {
+			if (isImageLine(entry.line)) {
+				wrappedLines.push(entry.line);
 			} else {
-				for (const wrappedLine of wrapTextWithAnsi(line, contentWidth)) {
-					wrappedLines.push(wrappedLine);
+				for (const wrappedLine of wrapTextWithAnsi(entry.line, contentWidth)) {
+					if (!entry.reorderable || !hasStrongRtl(wrappedLine)) {
+						wrappedLines.push(wrappedLine);
+						continue;
+					}
+					const visual = reorderLine(wrappedLine);
+					const aligned =
+						getBidiSettings().align && dominantDirection(wrappedLine) === "rtl"
+							? alignRight(visual, contentWidth)
+							: visual;
+					wrappedLines.push(aligned);
 				}
 			}
 		}
@@ -657,7 +700,12 @@ export class Markdown implements Component {
 					const styledLine = applyQuoteStyle(quoteLine);
 					const wrappedLines = wrapTextWithAnsi(styledLine, quoteContentWidth);
 					for (const wrappedLine of wrappedLines) {
-						lines.push(this.theme.quoteBorder("│ ") + wrappedLine);
+						if (getBidiSettings().align && dominantDirection(wrappedLine) === "rtl") {
+							// In RTL the quote bar marks the reading edge, so it sits on the right.
+							lines.push(paintVisual(wrappedLine, quoteContentWidth) + this.theme.quoteBorder(" │"));
+						} else {
+							lines.push(this.theme.quoteBorder("│ ") + paintVisual(wrappedLine, quoteContentWidth));
+						}
 					}
 				}
 				if (nextTokenType && nextTokenType !== "space") {
@@ -850,8 +898,21 @@ export class Markdown implements Component {
 				const itemLines = this.renderToken(itemToken, itemWidth, undefined, styleContext);
 				for (const line of itemLines) {
 					for (const wrappedLine of wrapTextWithAnsi(line, itemWidth)) {
-						const linePrefix = renderedAnyLine ? continuationPrefix : firstPrefix;
-						lines.push(linePrefix + wrappedLine);
+						if (getBidiSettings().align && dominantDirection(wrappedLine) === "rtl") {
+							// The marker marks the reading edge: in RTL it sits at the right and
+							// the item text hangs to its left. Continuation lines keep the same
+							// content edge, inset by the width of the marker.
+							const prefix = renderedAnyLine ? indent + " ".repeat(visibleWidth(marker)) : indent;
+							const mirroredMarker = mirrorMarker(marker);
+							const suffix = renderedAnyLine
+								? " ".repeat(visibleWidth(marker))
+								: this.theme.listBullet(mirroredMarker);
+							const region = Math.max(1, width - visibleWidth(prefix) - visibleWidth(suffix));
+							lines.push(prefix + paintVisual(wrappedLine, region) + suffix);
+						} else {
+							const linePrefix = renderedAnyLine ? continuationPrefix : firstPrefix;
+							lines.push(linePrefix + paintVisual(wrappedLine, itemWidth));
+						}
 						renderedAnyLine = true;
 					}
 				}
@@ -1020,6 +1081,18 @@ export class Markdown implements Component {
 			}
 		}
 
+		// A table reads the way the text around it reads. For an RTL-dominant table
+		// the first logical column is painted at the right, and the grid hugs the
+		// right edge of the column instead of the left.
+		const tableText = [token.header, ...token.rows]
+			.map((cells) => cells.map((cell) => cell.text ?? "").join(" "))
+			.join(" ");
+		const rtlTable = getBidiSettings().align && dominantDirection(tableText) === "rtl";
+		if (rtlTable) {
+			token = { ...token, header: [...token.header].reverse(), rows: token.rows.map((row) => [...row].reverse()) };
+			columnWidths = [...columnWidths].reverse();
+		}
+
 		// Render top border
 		const topBorderCells = columnWidths.map((w) => "─".repeat(w));
 		lines.push(`┌─${topBorderCells.join("─┬─")}─┐`);
@@ -1033,7 +1106,8 @@ export class Markdown implements Component {
 
 		for (let lineIdx = 0; lineIdx < headerLineCount; lineIdx++) {
 			const rowParts = headerCellLines.map((cellLines, colIdx) => {
-				const text = cellLines[lineIdx] || "";
+				// Cell content is painted in visual order; the grid and the padding stay put.
+				const text = paintVisual(cellLines[lineIdx] || "", columnWidths[colIdx]);
 				const padded = text + " ".repeat(Math.max(0, columnWidths[colIdx] - visibleWidth(text)));
 				return this.theme.bold(padded);
 			});
@@ -1056,7 +1130,7 @@ export class Markdown implements Component {
 
 			for (let lineIdx = 0; lineIdx < rowLineCount; lineIdx++) {
 				const rowParts = rowCellLines.map((cellLines, colIdx) => {
-					const text = cellLines[lineIdx] || "";
+					const text = paintVisual(cellLines[lineIdx] || "", columnWidths[colIdx]);
 					return text + " ".repeat(Math.max(0, columnWidths[colIdx] - visibleWidth(text)));
 				});
 				lines.push(`│ ${rowParts.join(" │ ")} │`);
@@ -1070,6 +1144,12 @@ export class Markdown implements Component {
 		// Render bottom border
 		const bottomBorderCells = columnWidths.map((w) => "─".repeat(w));
 		lines.push(`└─${bottomBorderCells.join("─┴─")}─┘`);
+
+		if (rtlTable) {
+			for (let i = 0; i < lines.length; i++) {
+				if (lines[i].includes("│") || lines[i].includes("─")) lines[i] = alignRight(lines[i], availableWidth);
+			}
+		}
 
 		if (nextTokenType && nextTokenType !== "space") {
 			lines.push(""); // Add spacing after table
