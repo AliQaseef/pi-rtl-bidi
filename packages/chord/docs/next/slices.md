@@ -50,7 +50,8 @@ reload has to reload real registries).
 | 6a | **The store** | the store (backends, tables, queries, writes, commit queue, outbox, documents engine, migrations, export), persisted documents, `self.table`, keyed watches and retirement |
 | 6b | **Durable and jobs on the store** | persisted jobs, Durable's `StoreStorage`, the Chord source over Durable's views (`self.follow`) |
 | 8 | **Registries and `host.root`** | registries, `self.writable`, `retryOn`, Durable's `registryReader`, `host.root` (`chord(fn, context)` and the harness object are p3's base code) |
-| 7 | **Reload and rollout** | plugin loading, staging, swaps and restarts, revisions, `accepts` in use |
+| 7a | **The dependency model** | requests that outlive providers, parked attempts without timers, wakes, the publication gate, getters, registries as dependencies, `parked_long` (`slice-7a.md`, `dependencies/model.md`) |
+| 7b | **Reload and rollout** | plugin loading (loader D), staging, swaps and restarts, removal and re-serving, revisions, `accepts` in use |
 | 9 | **Telemetry** | spans, events, metrics across hosts |
 
 The playground (`apps/chord-playground`) moves to the new code once slice 4 exists. Round-3 cuts (C3-C16) and
@@ -162,7 +163,7 @@ deleted (the slice's spec and code are the record). Moved here from `carry-over.
 - **`map(bytes())` is refused at declaration** ("unsupported keyword `~refine`"): TypeBox's `Record` copies the bytes
   schema's check as an enumerable key, which the snapshot walk refuses. An L1 bug found in slice 3a, not fixed yet.
 
-### Slice 7: reload and rollout
+### Slice 7b: reload and rollout (7a: the dependency model, `slice-7a.md`)
 
 - **A native restart drains first** (owner, 2026-10-26): park new calls, await running calls (bounded by
   `closeTimeout`), then close the natives and restart; a call outliving the drain is cut off by the seal fence. Running
